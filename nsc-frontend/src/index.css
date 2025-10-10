@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 15% 6%; /* Dark base */
+    --foreground: 220 15% 96%; /* Light text */
+
+    --muted: 220 10% 12%;
+    --muted-foreground: 220 10% 65%;
+
+    --popover: 220 15% 8%;
+    --popover-foreground: 220 15% 96%;
+
+    --card: 220 15% 10%;
+    --card-foreground: 220 15% 96%;
+
+    --border: 220 10% 18%;
+    --input: 220 10% 18%;
+
+    --primary: var(--color-cyan-500); /* Bright blue */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 10% 16%;
+    --secondary-foreground: 220 15% 96%;
+
+    --accent: 220 10% 20%;
+    --accent-foreground: 220 15% 96%;
+
+    --destructive: 0 72% 50%; /* Red */
+    --destructive-foreground: 0 0% 100%;
+
+    --ring: 217 91% 60%;
+
+    --radius: 0.5rem;
+
+    --chart-1: 217 91% 60%; /* blue */
+    --chart-2: 160 84% 39%; /* green */
+    --chart-3: 30 90% 55%;  /* orange */
+    --chart-4: 280 65% 60%; /* purple */
+    --chart-5: 340 75% 55%; /* pink */
+  }
+
+@layer base {
+  .dark {
+    --background: 220 13% 10%;
+    --foreground: 0 0% 96%;
+
+    --muted: 220 10% 15%;
+    --muted-foreground: 220 10% 70%;
+
+    --card: 220 12% 12%;
+    --card-foreground: 0 0% 96%;
+
+    --popover: 220 12% 12%;
+    --popover-foreground: 0 0% 96%;
+
+    --border: 220 10% 20%;
+    --input: 220 10% 20%;
+
+    --accent: 212 100% 44%;
+    --accent-foreground: 210 40% 98%;
+
+    --primary: var(--color-cyan-500);
+    --primary-foreground: 220 13% 10%;
+
+    --ring: 212 90% 50%;
+  }
+}
+
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+} 

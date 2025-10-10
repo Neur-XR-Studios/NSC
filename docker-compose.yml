@@ -1,0 +1,72 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: nsc-mysql
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-nsc}
+      MYSQL_USER: ${DB_USER:-nsc}
+      MYSQL_PASSWORD: ${DB_PASS:-nscpass}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpass}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-rootpass}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mqtt-broker:
+    image: eclipse-mosquitto:2
+    container_name: nsc-mqtt
+    ports:
+      - "9001:9001"   # MQTT over WebSocket
+    volumes:
+      - ./deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-h", "localhost", "-t", "$$SYS/#", "-C", "1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./nsc-backend
+      dockerfile: Dockerfile
+    container_name: nsc-backend
+    env_file:
+      - ./.env.docker
+    environment:
+      NODE_ENV: production
+      PORT: ${PORT:-5000}
+      DB_HOST: mysql
+      MQTT_URL: ${MQTT_URL:-mqtt://mqtt-broker:1883}
+      MQTT_CLIENT_ID_PREFIX: nsc-backend
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mqtt-broker:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_PORT:-8001}:5000"
+    command: >
+      sh -c "npm run db:migrate && npm run db:seed && node src/index.js"
+
+  frontend:
+    build:
+      context: ./nsc-frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+        VITE_API_URL: ${VITE_API_URL}
+        VITE_MQTT_WS_URL: ${VITE_MQTT_WS_URL}
+    container_name: nsc-frontend
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-8002}:80"
+
+volumes:
+  mysql_data:
+  mosquitto_data:
+  mosquitto_log:

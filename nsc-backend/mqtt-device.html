@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MQTT Device (VR/Chair)</title>
+  <script src="https://unpkg.com/paho-mqtt@1.1.0/paho-mqtt-min.js"></script>
+  <script>
+    // Lazy load Socket.IO for bridge mode
+    function loadSocketIo(src = 'https://cdn.socket.io/4.4.1/socket.io.min.js') {
+      return new Promise((resolve, reject) => {
+        if (window.io) { return resolve(); }
+        const s = document.createElement('script'); s.src = src; s.onload = () => resolve(); s.onerror = reject; document.head.appendChild(s);
+      });
+    }
+
+    // Group session helpers
+    function joinSession() {
+      const sid = (document.getElementById('sessionInput').value || '').trim();
+      if (!sid) { alert('Enter Session ID'); return; }
+      state.sessionId = sid; setK('s_session', `Session: ${sid}`);
+      try { localStorage.setItem('nsc_device_session', sid); } catch { }
+      // Subscribe to group command topic
+      sub(`sessions/${sid}/commands/+`);
+      // Notify status with session
+      const statusPayload = { deviceId: state.id, type: state.type, status: state.playing ? 'active' : 'idle', positionMs: Math.floor(state.positionMs), sessionId: sid, timestamp: new Date().toISOString() };
+      try { if (bridge && connected) bridge.emit('device:status', statusPayload); } catch { }
+      pub(T_status(state.id), JSON.stringify(statusPayload), true);
+    }
+
+    function leaveSession() {
+      const sid = state.sessionId; state.sessionId = '';
+      setK('s_session', 'Session: -');
+      try { localStorage.removeItem('nsc_device_session'); } catch { }
+      // No global unsubscribe to avoid removing backend subs; device will ignore further messages by not matching sessionId
+      const statusPayload = { deviceId: state.id, type: state.type, status: state.playing ? 'active' : 'idle', positionMs: Math.floor(state.positionMs), sessionId: '', timestamp: new Date().toISOString() };
+      try { if (bridge && connected) bridge.emit('device:status', statusPayload); } catch { }
+      pub(T_status(state.id), JSON.stringify(statusPayload), true);
+    }
+
+    // Device -> Admin events (user-triggered commands)
+    function sendEvent(evt) {
+      const payload = { deviceId: state.id, type: state.type, event: evt, positionMs: Math.floor(state.positionMs), sessionId: state.sessionId || '', timestamp: new Date().toISOString() };
+      // Via bridge
+      try { if (bridge && connected) bridge.emit('mqtt_publish', { topic: `devices/${state.id}/events`, payload: JSON.stringify(payload), options: { qos: 1, retain: false } }); } catch { }
+      // Also publish over MQTT topic for parity
+      pub(`devices/${state.id}/events`, JSON.stringify(payload), false);
+    }
+  </script>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      margin: 0;
+      background: #f5f7fb;
+    }
+
+    .container {
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+    }
+
+    .card {
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 16px;
+      margin: 12px 0;
+    }
+
+    .row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    label {
+      font-size: 12px;
+      color: #374151;
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    input,
+    select,
+    button {
+      padding: 8px 10px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+
+    button {
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      cursor: pointer;
+    }
+
+    button.danger {
+      background: #dc2626;
+    }
+
+    .muted {
+      color: #6b7280;
+    }
+
+    .kvs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .pill {
+      padding: 2px 6px;
+      background: #e5e7eb;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+
+    .log {
+      height: 160px;
+      overflow: auto;
+      background: #0b1020;
+      color: #b2c1ff;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      padding: 10px;
+      border-radius: 8px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>MQTT Device</h1>
+
+    <div class="card">
+      <div class="row">
+        <div style="flex:1; min-width:280px;">
+          <label>Backend URL (Socket.IO)</label>
+          <input id="mqttUrl" value="http://localhost:8001" style="width:100%" />
+        </div>
+        <div style="min-width:160px;">
+          <label>Device Type</label>
+          <select id="deviceType">
+            <option value="vr">VR</option>
+            <option value="chair">Chair</option>
+          </select>
+        </div>
+        <div style="min-width:220px;">
+          <label>Device ID</label>
+          <input id="deviceId" placeholder="DEV_XXXX" />
+        </div>
+        <div style="align-self:flex-end; display:flex; gap:8px;">
+          <button id="btnConnect" onclick="connectBroker()">Connect</button>
+          <button id="btnDisconnect" class="danger" onclick="disconnectBroker()" disabled>Disconnect</button>
+        </div>
+      </div>
+      <div id="connStatus" class="muted">Disconnected</div>
+    </div>
+
+    <div class="card">
+      <h3>Status</h3>
+      <div class="kvs">
+        <span class="pill" id="s_type">Type: -</span>
+        <span class="pill" id="s_id">ID: -</span>
+        <span class="pill" id="s_session">Session: -</span>
+        <span class="pill" id="s_peer">Peer: -</span>
+        <span class="pill" id="s_journey">Journey: -</span>
+      </div>
+      <div class="kvs" style="margin-top:8px;">
+        <span class="pill" id="s_state">State: idle</span>
+        <span class="pill" id="s_pos">Position: 0 ms</span>
+      </div>
+      <div class="row" style="margin-top:10px; align-items:flex-end;">
+        <div style="min-width:220px;">
+          <label>Session ID (Group)</label>
+          <input id="sessionInput" placeholder="S_XXXX" />
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button onclick="joinSession()">Join Session</button>
+          <button class="danger" onclick="leaveSession()">Leave Session</button>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="secondary" onclick="sendEvent('play')">Play (send)</button>
+          <button class="secondary" onclick="sendEvent('pause')">Pause (send)</button>
+          <button class="secondary" onclick="sendEvent('stop')">Stop (send)</button>
+          <button class="secondary" onclick="sendEvent('reset')">Reset (send)</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Logs</h3>
+      <div id="log" class="log"></div>
+    </div>
+  </div>
+
+  <script>
+    // State
+    let client = null; // Paho client (unused in forced bridge mode)
+    let bridge = null; // Socket.IO client (bridge mode)
+    let connected = false; let ticker = null; let mode = 'bridge';
+    const state = {
+      id: '', type: 'vr', name: '', sessionId: '', peer: '', journeyId: '',
+      playing: false, positionMs: 0, lastTick: 0
+    };
+
+    // Utils
+    function rand(n = 6) { return Math.random().toString(36).slice(2, 2 + n).toUpperCase(); }
+    function appendRand(el) { if (!el._touched) { el.value += rand(); el._touched = true; } }
+    function log(msg) { const el = document.getElementById('log'); const ts = new Date().toLocaleTimeString(); el.textContent += `[${ts}] ${msg}\n`; el.scrollTop = el.scrollHeight; console.log(msg); }
+    function setK(id, v) { document.getElementById(id).textContent = v; }
+    function setConnStatus(t) { document.getElementById('connStatus').textContent = t; }
+
+    // MQTT topics helpers (backend-aligned)
+    function T_discovery_announce() { return 'devices/discovery/announce'; }
+    function T_status(id) { return `devices/${id}/status`; }
+    function T_heartbeat(id) { return `devices/${id}/heartbeat`; }
+    function T_cmd_any(id) { return `devices/${id}/commands/+`; }
+
+    function connectBroker() {
+      if (connected) return;
+      const url = document.getElementById('mqttUrl').value.trim();
+      // Read device type from selector; name optional/internal
+      state.type = document.getElementById('deviceType').value || 'vr';
+      state.id = document.getElementById('deviceId').value.trim() || ('DEV_' + rand(8));
+      state.name = '';
+      setK('s_type', `Type: ${state.type}`); setK('s_id', `ID: ${state.id}`);
+      // Restore sessionId from storage if present
+      try {
+        const savedSid = localStorage.getItem('nsc_device_session');
+        if (savedSid) { state.sessionId = savedSid; document.getElementById('sessionInput').value = savedSid; setK('s_session', `Session: ${savedSid}`); }
+      } catch { }
+
+      // Force Socket.IO bridge mode for simplicity
+      mode = 'bridge';
+      loadSocketIo().then(() => {
+        bridge = io(url, { transports: ['websocket'] });
+        bridge.on('connect', () => {
+          connected = true; setConnStatus('Connected (bridge)'); log('Bridge connected to ' + url); toggleButtons();
+          // Identify to backend for immediate offline on disconnect
+          bridge.emit('device:identify', { deviceId: state.id, type: state.type, name: state.name });
+          // Subscribe to device command topics
+          sub(T_cmd_any(state.id));
+          // If we have a session, re-subscribe and announce status
+          if (state.sessionId) {
+            sub(`sessions/${state.sessionId}/commands/+`);
+          }
+          // announce + status
+          pub(T_discovery_announce(), JSON.stringify({ deviceId: state.id, type: state.type, name: state.name, metadata: {}, timestamp: new Date().toISOString() }), false);
+          const statusPayload = { deviceId: state.id, type: state.type, status: 'active', positionMs: Math.floor(state.positionMs), sessionId: state.sessionId || '', timestamp: new Date().toISOString() };
+          // MQTT status
+          pub(T_status(state.id), JSON.stringify(statusPayload), true);
+          // Socket.IO status fallback
+          try { bridge.emit('device:status', statusPayload); } catch { }
+          // Immediate heartbeat over Socket.IO and MQTT
+          try { bridge.emit('device:heartbeat', { deviceId: state.id, type: state.type, status: 'active', timestamp: new Date().toISOString() }); } catch { }
+          pub(T_heartbeat(state.id), JSON.stringify({ timestamp: new Date().toISOString(), status: 'active' }), false);
+          startTicker();
+        });
+        bridge.on('disconnect', () => { connected = false; setConnStatus('Disconnected'); toggleButtons(); stopTicker(); });
+        bridge.on('mqtt_message', ({ topic, payload }) => {
+          const msg = { destinationName: topic, payloadString: (typeof payload === 'string' ? payload : JSON.stringify(payload || {})) };
+          onMsg(msg);
+        });
+      }).catch(err => { log('Socket.IO load/connect failed: ' + (err?.message || err)); });
+    }
+
+    function disconnectBroker() {
+      if (mode === 'bridge' && bridge) { bridge.disconnect(); bridge = null; }
+      if (mode === 'mqtt' && client) { client.disconnect(); client = null; }
+    }
+    function toggleButtons() { document.getElementById('btnConnect').disabled = connected; document.getElementById('btnDisconnect').disabled = !connected; }
+
+    function sub(topic) {
+      if (!connected) return;
+      if (mode === 'bridge') {
+        bridge.emit('mqtt_subscribe', { topic, options: { qos: 1 } });
+        log('Sub (bridge) ' + topic);
+      } else {
+        client.subscribe(topic, { qos: 1 }); log('Sub ' + topic);
+      }
+    }
+    function pub(topic, payload, retain = false) {
+      if (!connected) return;
+      if (mode === 'bridge') {
+        bridge.emit('mqtt_publish', { topic, payload, options: { qos: 1, retain } });
+        log(`Pub (bridge) ${topic} ${payload}`);
+      } else {
+        const PahoMessage = Paho.Message || (Paho.MQTT && Paho.MQTT.Message); const m = new PahoMessage(payload); m.destinationName = topic; m.qos = 1; m.retained = retain; client.send(m); log(`Pub ${topic} ${payload}`);
+      }
+    }
+
+    function onMsg(msg) {
+      const t = msg.destinationName; const p = msg.payloadString || ''; log('Msg ' + t + ' ' + p);
+      try {
+        const cmdPrefix = `devices/${state.id}/commands/`;
+        if (t.startsWith(cmdPrefix)) {
+          const data = JSON.parse(p || '{}');
+          data.command = t.substring(cmdPrefix.length);
+          handleCmd(data);
+        } else if (state.sessionId) {
+          const sessPrefix = `sessions/${state.sessionId}/commands/`;
+          if (t.startsWith(sessPrefix)) {
+            const data = JSON.parse(p || '{}');
+            data.command = t.substring(sessPrefix.length);
+            handleCmd(data);
+          }
+        }
+      } catch (e) { log('Parse error: ' + e.message); }
+    }
+
+    function handleCmd(data) {
+      const cmd = (data.command || data.type || '').toLowerCase();
+      if (cmd === 'start' || cmd === 'play') {
+        state.playing = true; if (typeof data.positionMs === 'number') state.positionMs = data.positionMs; setK('s_state', 'State: playing');
+      } else if (cmd === 'pause') {
+        state.playing = false; if (typeof data.positionMs === 'number') state.positionMs = data.positionMs; setK('s_state', 'State: paused');
+      } else if (cmd === 'seek') {
+        if (typeof data.positionMs === 'number') state.positionMs = data.positionMs; setK('s_state', 'State: seeking');
+      } else if (cmd === 'stop' || cmd === 'reset') {
+        state.playing = false; state.positionMs = 0; setK('s_state', 'State: stopped');
+      } else if (cmd === 'calibrate') {
+        setK('s_state', 'State: calibrating');
+      } else if (cmd === 'join_session') {
+        const sid = String(data.sessionId || data.session_id || '').trim();
+        if (sid) { document.getElementById('sessionInput').value = sid; joinSession(); }
+      } else if (cmd === 'leave_session') {
+        leaveSession();
+      }
+      setK('s_pos', `Position: ${Math.max(0, Math.floor(state.positionMs))} ms`);
+      // Also emit a status update
+      const statusPayload = { deviceId: state.id, type: state.type, status: state.playing ? 'active' : 'idle', positionMs: Math.floor(state.positionMs), sessionId: state.sessionId || '', timestamp: new Date().toISOString() };
+      pub(T_status(state.id), JSON.stringify(statusPayload), false);
+      try { if (bridge && connected) bridge.emit('device:status', statusPayload); } catch { }
+    }
+
+    function startTicker() {
+      if (ticker) return; state.lastTick = Date.now(); ticker = setInterval(() => {
+        const now = Date.now(); const dt = now - state.lastTick; state.lastTick = now;
+        if (state.playing) { state.positionMs += dt; }
+        setK('s_pos', `Position: ${Math.max(0, Math.floor(state.positionMs))} ms`);
+        // Heartbeat roughly every 15s with some jitter
+      }, 1000);
+    }
+
+    // Send heartbeat every 15 seconds (Socket.IO + MQTT)
+    setInterval(() => {
+      if (!connected) return;
+      const hb = { deviceId: state.id, type: state.type, timestamp: new Date().toISOString(), status: state.playing ? 'active' : 'idle' };
+      try { if (bridge) bridge.emit('device:heartbeat', hb); } catch { }
+      pub(T_heartbeat(state.id), JSON.stringify(hb), false);
+    }, 15000);
+
+    function stopTicker() { if (ticker) { clearInterval(ticker); ticker = null; } }
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,46 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Build outputs
+/dist/
+/build/
+coverage/
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# Env files (keep examples only, but allow .env.docker)
+.env
+.env.*
+!.env.example
+!.env.docker
+
+# Docker/Compose local overrides
+docker-compose.override.yml
+
+# Backend runtime assets (do not commit uploaded/generated files)
+/nsc-backend/src/public/audio/
+/nsc-backend/src/public/telemetry/
+/nsc-backend/src/public/thumbnails/
+/nsc-backend/src/public/video/
+/nsc-backend/logs/
+/nsc-backend/node_modules/
+/nsc-backend/yarn.lock
+
+# Frontend build output
+/nsc-frontend/dist/
+/nsc-frontend/node_modules/
+/nsc-frontend/package-lock.json
+
+# Editor/IDE
+.vscode/
+.idea/

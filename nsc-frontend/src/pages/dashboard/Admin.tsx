@@ -1,0 +1,14 @@
+import { Button } from '@/components/ui/button'
+import { useAuthStore } from '@/store/auth'
+
+export default function Admin() {
+  const logout = useAuthStore((s) => s.logout)
+  const user = useAuthStore((s) => s.user)
+  return (
+    <div className="p-6 space-y-4">
+      <h1 className="text-2xl font-bold">Admin Dashboard</h1>
+      <p className="text-muted-foreground">Welcome, {user?.name}</p>
+      <Button onClick={logout}>Logout</Button>
+    </div>
+  )
+}
