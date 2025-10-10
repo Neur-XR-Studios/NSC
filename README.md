@@ -14,7 +14,7 @@ Redis is not required and has been removed.
 ## Quick start
 1. Clone the project
 ```
-git clone <YOUR_GIT_REMOTE_URL> NSC
+git clone https://github.com/Neur-XR-Studios/NSC.git NSC
 cd NSC
 ```
 
