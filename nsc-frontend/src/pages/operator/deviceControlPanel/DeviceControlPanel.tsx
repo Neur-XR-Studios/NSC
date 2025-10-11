@@ -5,8 +5,8 @@ import type { JourneyItem } from "@/types/journey";
 import { createGroupSession, createIndividualSession, commandSession, type SessionType } from "@/lib/sessions";
 import ProgressStepper from "./components/ProgressStepper";
 import SessionTypeStep from "./components/steps/SessionTypeStep";
-import DeviceSelectionStep from "./components/steps/DeviceSelectionStep";
 import JourneySelectionStep from "./components/steps/JourneySelectionStep";
+import DeviceSelectionStep from "./components/steps/DeviceSelectionStep";
 import ControllerStep from "./components/steps/ControllerStep";
 
 type DeviceType = "vr" | "chair" | "unknown";
@@ -17,6 +17,9 @@ type Device = {
   name: string;
   online: boolean;
   lastSeen?: number;
+  status?: string;
+  positionMs?: number;
+  sessionId?: string;
 };
 
 type Pair = {
@@ -52,8 +55,11 @@ interface SessionsEnvelope {
 
 export default function DeviceControlPanel() {
   // Connection form state
-  const [mqttUrl] = useState<string>("http://localhost:8001");
+  // Use explicit backend URL for bridge (Socket.IO). Default to localhost:8001 during dev.
+  const backendUrl = (import.meta.env.VITE_BACKEND_URL as string) || 'http://localhost:8001';
+  const mqttWsUrl = (import.meta.env.VITE_MQTT_WS_URL as string) || 'ws://localhost:9001';
   const [forceBridge] = useState<boolean>(true);
+  const [mqttUrl] = useState<string>(forceBridge ? backendUrl : mqttWsUrl);
   const [clientId] = useState<string>(`admin-${Math.random().toString(36).slice(2, 8).toUpperCase()}`);
   const [username] = useState<string>("admin@example.com");
   const [password] = useState<string>("Admin@123");
@@ -159,6 +165,7 @@ export default function DeviceControlPanel() {
     }
   }, [logs]);
 
+
   const renderDevices = useCallback((updater: (prev: Map<string, Device>) => Map<string, Device>) => {
     setDevicesMap((prev) => {
       const next = new Map(prev);
@@ -183,6 +190,38 @@ export default function DeviceControlPanel() {
     },
     [connected, log],
   );
+
+  // Broadcast helper: instruct paired devices to join session via device-specific command
+  const broadcastSessionJoin = useCallback(
+    (sid: string, targetPairs: Pair[]) => {
+      try {
+        const ts = new Date().toISOString();
+        for (const p of targetPairs) {
+          const payload = {
+            sessionId: sid,
+            journeyId: p.journeyId || [],
+            timestamp: ts,
+          };
+          publishTopic(`devices/${p.vrId}/commands/join_session`, JSON.stringify(payload), false);
+          publishTopic(`devices/${p.chairId}/commands/join_session`, JSON.stringify(payload), false);
+        }
+        log(`Broadcasted join_session to ${targetPairs.length * 2} devices for session ${sid}`);
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : String(e);
+        log(`Broadcast failed: ${message}`);
+      }
+    },
+    [publishTopic, log],
+  );
+
+  // When landing in controller (including ongoing sessions), ensure devices have the session id
+  useEffect(() => {
+    if (currentStep !== "controller" || !activeSessionId) return;
+    const targets = pairs.filter((p) => p.sessionId === activeSessionId);
+    if (targets.length > 0) {
+      broadcastSessionJoin(activeSessionId, targets);
+    }
+  }, [currentStep, activeSessionId, pairs, broadcastSessionJoin]);
 
   const handleMessage = useCallback(
     (msg: { destinationName: string; payloadString?: string }) => {
@@ -212,7 +251,19 @@ export default function DeviceControlPanel() {
           renderDevices((map) => {
             const cur: Device = map.get(id) || { id, type: "unknown", name: id, online: false };
             const status = String((data && data.status) || "").toLowerCase();
-            cur.online = ["active", "idle", "online"].includes(status);
+            cur.online = ["active", "idle", "online", "connecting"].includes(status);
+            cur.status = status || cur.status;
+            // Update device type from status payload if provided
+            const reportedType = String((data && data.type) || "").toLowerCase();
+            if (reportedType === "vr" || reportedType === "chair") {
+              cur.type = reportedType as DeviceType;
+            } else if (cur.type === "unknown") {
+              // Fallback: infer from deviceId prefix
+              if (/^vr[_-]?/i.test(id)) cur.type = "vr";
+              else if (/^chair[_-]?/i.test(id)) cur.type = "chair";
+            }
+            if (typeof data?.positionMs === "number") cur.positionMs = Number(data.positionMs);
+            if (typeof data?.sessionId === "string") cur.sessionId = String(data.sessionId);
             cur.lastSeen = Date.now();
             map.set(id, cur);
             return map;
@@ -435,11 +486,15 @@ export default function DeviceControlPanel() {
       setActiveSessionId(rec.id);
       setCurrentStep("controller");
       log(`Individual session created: ${rec.id}`);
+      // After creation, instruct paired devices to join this session
+      broadcastSessionJoin(rec.id, [
+        { ...only, sessionId: rec.id, journeyId: selectedJourneyIds.map((id) => Number(id)) },
+      ]);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       log(`Create session failed: ${message}`);
     }
-  }, [pairs, selectedJourneyIds, log]);
+  }, [pairs, selectedJourneyIds, log, broadcastSessionJoin]);
 
   const handleCreateGroup = useCallback(async () => {
     try {
@@ -458,11 +513,18 @@ export default function DeviceControlPanel() {
       setActiveSessionId(sid);
       setCurrentStep("controller");
       log(`Group session created: ${sid} (group: ${res.groupId})`);
+      // After creation, instruct all paired devices to join this session
+      const enriched = pairs.map((p) => ({
+        ...p,
+        sessionId: sid,
+        journeyId: selectedJourneyIds.map((id) => parseInt(id)),
+      }));
+      broadcastSessionJoin(sid, enriched);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       log(`Create group failed: ${message}`);
     }
-  }, [pairs, selectedJourneyIds, log]);
+  }, [pairs, selectedJourneyIds, log, broadcastSessionJoin]);
 
   const getStepNumber = (step: FlowStep) => {
     const steps: FlowStep[] = ["session-type", "device-selection", "journey-selection", "controller"];
@@ -473,6 +535,14 @@ export default function DeviceControlPanel() {
   const onlineById = useMemo(() => {
     const map: Record<string, boolean> = {};
     for (const d of devicesList) map[d.id] = !!d.online;
+    return map;
+  }, [devicesList]);
+
+  const deviceInfoById = useMemo(() => {
+    const map: Record<string, { status?: string; positionMs?: number; sessionId?: string }> = {};
+    for (const d of devicesList) {
+      map[d.id] = { status: d.status, positionMs: d.positionMs, sessionId: d.sessionId };
+    }
     return map;
   }, [devicesList]);
 
@@ -531,7 +601,7 @@ export default function DeviceControlPanel() {
               onBack={() => setCurrentStep("device-selection")}
               sessionType={sessionType}
               selectedJourneyIds={selectedJourneyIds}
-              setSelectedJourneyIds={(updater) => setSelectedJourneyIds((prev) => updater(prev))}
+              setSelectedJourneyIds={(updater: (prev: string[]) => string[]) => setSelectedJourneyIds((prev) => updater(prev))}
               onCreateIndividual={() => void handleCreateIndividual()}
               onCreateGroup={() => void handleCreateGroup()}
             />
@@ -546,8 +616,13 @@ export default function DeviceControlPanel() {
               setSeekValues={(updater) => setSeekValues((prev) => updater(prev))}
               sendCmd={sendCmd}
               onNewSession={resetFlow}
+              onResendSession={() => {
+                const targets = pairs.filter((p) => p.sessionId === activeSessionId);
+                if (activeSessionId && targets.length) broadcastSessionJoin(activeSessionId, targets);
+              }}
               pairs={pairs}
               onlineById={onlineById}
+              deviceInfoById={deviceInfoById}
               lockToExistingSession={hasOngoingSession}
               sessionType={sessionType}
             />

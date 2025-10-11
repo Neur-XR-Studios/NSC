@@ -12,7 +12,7 @@ const validator = new JourneyValidator();
 router.post('/', auth(['admin']), validator.createValidator, controller.create);
 
 // List Journeys
-router.get('/', auth(['admin', 'user']), controller.list);
+router.get('/', controller.list);
 
 // VR-friendly list (simplified payload) - consider leaving public
 router.get('/vr/list', controller.listForVr);

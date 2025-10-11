@@ -65,6 +65,23 @@ class SessionService {
       session_type: type,
     });
 
+    // Broadcast join_session to devices so they attach to the session topics immediately
+    try {
+      const ts = new Date().toISOString();
+      const payload = { sessionId: session.id, journeyId: journeys, timestamp: ts };
+      if (vr?.deviceId) {
+        mqttService.publish(`devices/${vr.deviceId}/commands/join_session`, payload, { qos: 1, retain: false });
+      }
+      if (chair?.deviceId) {
+        mqttService.publish(`devices/${chair.deviceId}/commands/join_session`, payload, { qos: 1, retain: false });
+      }
+      // Also mirror to Socket.IO bridge to reach web-bridged devices immediately
+      try { global.io?.emit('mqtt_message', { topic: `devices/${vr?.deviceId || ''}/commands/join_session`, payload }); } catch { /* noop */ }
+      try { global.io?.emit('mqtt_message', { topic: `devices/${chair?.deviceId || ''}/commands/join_session`, payload }); } catch { /* noop */ }
+    } catch (e) {
+      // Non-fatal
+    }
+
     return { statusCode: httpStatus.OK, response: { status: true, data: session } };
   }
 
@@ -116,6 +133,7 @@ class SessionService {
 
     // Create participants
     const participantsPayload = [];
+    const joinTargets = [];
     for (const m of members) {
       const memberErrors = { index: participantsPayload.length, missingFields: [], notFoundDevices: [] };
       if (!m.vrDeviceId) memberErrors.missingFields.push('vrDeviceId');
@@ -138,6 +156,8 @@ class SessionService {
         language: m.language || null,
         joined_at: new Date(),
       });
+      // Keep hardware ids for broadcast
+      joinTargets.push({ vrHw: vr.deviceId, chairHw: chair.deviceId });
     }
 
     if (errors.missingFields.length || errors.members.length || errors.notFoundJourneys.length) {
@@ -145,6 +165,20 @@ class SessionService {
     }
 
     await SessionParticipant.bulkCreate(participantsPayload);
+
+    // Broadcast join_session to all VR/Chair devices in the group
+    try {
+      const ts = new Date().toISOString();
+      const payload = { sessionId: session.id, journeyId: journeys, timestamp: ts };
+      for (const tgt of joinTargets) {
+        if (tgt.vrHw) mqttService.publish(`devices/${tgt.vrHw}/commands/join_session`, payload, { qos: 1, retain: false });
+        if (tgt.chairHw) mqttService.publish(`devices/${tgt.chairHw}/commands/join_session`, payload, { qos: 1, retain: false });
+        try { if (tgt.vrHw) global.io?.emit('mqtt_message', { topic: `devices/${tgt.vrHw}/commands/join_session`, payload }); } catch { /* noop */ }
+        try { if (tgt.chairHw) global.io?.emit('mqtt_message', { topic: `devices/${tgt.chairHw}/commands/join_session`, payload }); } catch { /* noop */ }
+      }
+    } catch (e) {
+      // Non-fatal
+    }
 
     return { statusCode: httpStatus.OK, response: { status: true, data: { session, groupId: finalGroupId, participants: participantsPayload } } };
   }

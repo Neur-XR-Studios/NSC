@@ -9,6 +9,10 @@ interface VideoPlayerProps {
   isAutoPlay?: boolean;
   isShowVolume?: boolean;
   isShowFullscreen?: boolean;
+  ontogglePlay?: (playing: boolean) => void;
+  onTimeUpdateRes?: (progress: number) => void;
+  externalCurrentMs?: number;
+  externalPlaying?: boolean;
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
@@ -19,6 +23,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   isAutoPlay = false,
   isShowVolume = true,
   isShowFullscreen = true,
+  ontogglePlay,
+  onTimeUpdateRes,
+  externalCurrentMs,
+  externalPlaying,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -34,9 +42,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (el.paused) {
       el.play();
       setPlaying(true);
+      ontogglePlay?.(true);
     } else {
       el.pause();
       setPlaying(false);
+      ontogglePlay?.(false);
     }
   };
 
@@ -44,6 +54,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const el = videoRef.current;
     if (!el) return;
     setProgress((el.currentTime / (el.duration || 1)) * 100);
+    onTimeUpdateRes?.((el.currentTime / (el.duration || 1)) * 100);
   };
 
   const onLoadedMetadata = () => {
@@ -58,6 +69,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const pct = Number(e.target.value);
     el.currentTime = (pct / 100) * (el.duration || 0);
     setProgress(pct);
+    onTimeUpdateRes?.((el.currentTime / (el.duration || 1)) * 100);
   };
 
   const toggleMute = () => {
@@ -103,6 +115,32 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       el.removeEventListener("pause", onPause);
     };
   }, []);
+
+  // Sync external current time (ms)
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    if (typeof externalCurrentMs === "number" && isFinite(externalCurrentMs) && externalCurrentMs >= 0) {
+      const targetSec = (externalCurrentMs / 1000) || 0;
+      // Avoid thrashing: only seek if difference > 300ms
+      if (Math.abs((el.currentTime || 0) - targetSec) > 0.3) {
+        el.currentTime = targetSec;
+      }
+    }
+  }, [externalCurrentMs]);
+
+  // Sync external playing state
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    if (typeof externalPlaying === "boolean") {
+      if (externalPlaying && el.paused) {
+        el.play().catch(() => {/* ignore */});
+      } else if (!externalPlaying && !el.paused) {
+        el.pause();
+      }
+    }
+  }, [externalPlaying]);
 
   const fmt = useMemo(
     () => (n: number) => {
