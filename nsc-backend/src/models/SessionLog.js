@@ -14,11 +14,44 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       comment: 'e.g., video_started, video_finished, error, note',
     },
-    video_id: {
+    journey_id: {
       type: DataTypes.INTEGER,
       allowNull: true,
     },
+    start_time: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    end_time: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    duration_ms: {
+      type: DataTypes.BIGINT,
+      allowNull: true,
+    },
+    vr_device_id: {
+      type: DataTypes.STRING(32),
+      allowNull: true,
+    },
+    position_ms: {
+      type: DataTypes.BIGINT,
+      allowNull: true,
+      comment: 'Playback position when the event occurred',
+    },
+    error_code: {
+      type: DataTypes.STRING(64),
+      allowNull: true,
+    },
+    error_message: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
     details: {
+      type: DataTypes.JSON,
+      allowNull: true,
+    },
+    metadata: {
       type: DataTypes.JSON,
       allowNull: true,
     },

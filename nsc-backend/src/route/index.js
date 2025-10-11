@@ -7,6 +7,7 @@ const telemetryRoute = require('./telemetryRoute');
 const journeyRoute = require('./journeyRoute');
 const deviceRoute = require('./deviceRoute');
 const sessionRoute = require('./sessionRoute');
+const sessionLogRoute = require('./sessionLogRoute');
 const router = express.Router();
 
 const defaultRoutes = [
@@ -41,6 +42,10 @@ const defaultRoutes = [
     {
         path: '/sessions',
         route: sessionRoute,
+    },
+    {
+        path: '/session-logs',
+        route: sessionLogRoute,
     },
 ];
 
