@@ -35,22 +35,13 @@ const instance = axios.create({
   },
   withCredentials: true,
 });
-
 let isRefreshing = false;
 type QueueItem = {
   resolve: (token: string) => void;
   reject: (err: unknown) => void;
 };
-let failedQueue: QueueItem[] = [];
 
-const processQueue = (error: unknown, token: string | null = null) => {
-  failedQueue.forEach((prom) => {
-    if (error) prom.reject(error);
-    else if (token) prom.resolve(token);
-    else prom.reject(new Error("No token available"));
-  });
-  failedQueue = [];
-};
+let failedQueue: QueueItem[] = [];
 
 instance.interceptors.request.use(
   async (config) => {

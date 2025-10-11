@@ -25,20 +25,28 @@ class SessionLogService {
     try {
       const where = {};
       if (session_id) where.session_id = session_id;
-      if (journey_id) where.journey_id = journey_id;
+      if (journey_id !== undefined && journey_id !== null && `${journey_id}` !== '') {
+        const jId = Number(journey_id);
+        if (!Number.isNaN(jId)) where.journey_id = jId;
+      }
       if (event) where.event = event;
 
-      const offset = (Math.max(1, parseInt(page, 10)) - 1) * parseInt(limit, 10);
+      // Safely parse pagination values to avoid NaN in LIMIT/OFFSET
+      const pageNumRaw = Number(page);
+      const limitNumRaw = Number(limit);
+      const pageNum = Number.isFinite(pageNumRaw) && pageNumRaw > 0 ? Math.floor(pageNumRaw) : 1;
+      const limitNum = Number.isFinite(limitNumRaw) && limitNumRaw > 0 ? Math.floor(limitNumRaw) : 20;
+      const offset = (pageNum - 1) * limitNum;
       const result = await this.dao.Model.findAndCountAll({
         where,
-        limit: parseInt(limit, 10),
-        offset,
+        limit: limitNum,
+        offset: offset,
         order: [['created_at', 'DESC']],
       });
       return responseHandler.returnSuccess(httpStatus.OK, 'Session logs fetched', {
         total: result.count,
-        page: parseInt(page, 10),
-        limit: parseInt(limit, 10),
+        page: pageNum,
+        limit: limitNum,
         data: result.rows,
       });
     } catch (e) {
