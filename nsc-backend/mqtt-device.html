@@ -15,7 +15,7 @@
       });
     }
 
-    // Group session helpers
+    // Group/Individual session helpers
     function joinSession() {
       const sid = (document.getElementById('sessionInput').value || '').trim();
       if (!sid) { alert('Enter Session ID'); return; }
@@ -27,6 +27,8 @@
       const statusPayload = { deviceId: state.id, type: state.type, status: state.playing ? 'active' : 'idle', positionMs: Math.floor(state.positionMs), sessionId: sid, timestamp: new Date().toISOString() };
       try { if (bridge && connected) bridge.emit('device:status', statusPayload); } catch { }
       pub(T_status(state.id), JSON.stringify(statusPayload), true);
+      // Fetch current ongoing session details and populate journeys
+      try { fetchOngoingSessionDetails(); } catch {}
     }
 
     function leaveSession() {
@@ -201,6 +203,29 @@
       <h3>Logs</h3>
       <div id="log" class="log"></div>
     </div>
+
+    <div class="card">
+      <h3>Journeys (from Session)</h3>
+      <div id="journeysList" class="muted">No session loaded.</div>
+    </div>
+
+    <div class="card">
+      <h3>Video (Test Playback)</h3>
+      <div class="row" style="align-items:flex-end;">
+        <div style="flex:1; min-width:300px;">
+          <label>Video URL</label>
+          <input id="videoUrl" placeholder="http://localhost:8001/video/<file>" style="width:100%" />
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button onclick="loadVideoUrl()">Load URL</button>
+          <button onclick="clearVideoUrl()" class="danger">Clear</button>
+        </div>
+      </div>
+      <div style="margin-top:10px;">
+        <video id="player" style="width:100%; max-height:300px; background:#000;" playsinline muted></video>
+      </div>
+      <div class="muted" style="margin-top:6px; font-size:12px;">Note: This is a local test player. Devices should load their own media for a journey. Use this to verify command timing.</div>
+    </div>
   </div>
 
   <script>
@@ -210,8 +235,11 @@
     let connected = false; let ticker = null; let mode = 'bridge';
     const state = {
       id: '', type: 'vr', name: '', sessionId: '', peer: '', journeyId: '',
+      sessionType: '',
       playing: false, positionMs: 0, lastTick: 0
     };
+    let player = null;
+    let backendBaseUrl = '';
 
     // Utils
     function rand(n = 6) { return Math.random().toString(36).slice(2, 2 + n).toUpperCase(); }
@@ -219,6 +247,18 @@
     function log(msg) { const el = document.getElementById('log'); const ts = new Date().toLocaleTimeString(); el.textContent += `[${ts}] ${msg}\n`; el.scrollTop = el.scrollHeight; console.log(msg); }
     function setK(id, v) { document.getElementById(id).textContent = v; }
     function setConnStatus(t) { document.getElementById('connStatus').textContent = t; }
+    function loadVideoUrl() {
+      const url = (document.getElementById('videoUrl').value || '').trim();
+      if (!player) player = document.getElementById('player');
+      if (!player) return;
+      if (!url) { alert('Enter a video URL'); return; }
+      try { player.src = url; player.load(); log('Loaded video URL'); } catch (e) { log('Video load error: ' + (e?.message || e)); }
+    }
+    function clearVideoUrl() {
+      if (!player) player = document.getElementById('player');
+      if (!player) return;
+      try { player.pause(); player.removeAttribute('src'); player.load(); log('Cleared video URL'); } catch {}
+    }
 
     // MQTT topics helpers (backend-aligned)
     function T_discovery_announce() { return 'devices/discovery/announce'; }
@@ -229,11 +269,26 @@
     function connectBroker() {
       if (connected) return;
       const url = document.getElementById('mqttUrl').value.trim();
+      backendBaseUrl = url;
       // Read device type from selector; name optional/internal
       state.type = document.getElementById('deviceType').value || 'vr';
       state.id = document.getElementById('deviceId').value.trim() || ('DEV_' + rand(8));
       state.name = '';
       setK('s_type', `Type: ${state.type}`); setK('s_id', `ID: ${state.id}`);
+      player = document.getElementById('player');
+      if (player) {
+        player.addEventListener('timeupdate', () => {
+          const t = (player.currentTime || 0) * 1000;
+          // Trust the video clock when playing
+          if (!Number.isNaN(t)) {
+            state.positionMs = t;
+            setK('s_pos', `Position: ${Math.max(0, Math.floor(state.positionMs))} ms`);
+          }
+        });
+        player.addEventListener('play', () => { state.playing = true; setK('s_state', 'State: playing'); });
+        player.addEventListener('pause', () => { state.playing = false; setK('s_state', 'State: paused'); });
+        player.addEventListener('ended', () => { state.playing = false; setK('s_state', 'State: stopped'); });
+      }
       // Restore sessionId from storage if present
       try {
         const savedSid = localStorage.getItem('nsc_device_session');
@@ -250,10 +305,9 @@
           bridge.emit('device:identify', { deviceId: state.id, type: state.type, name: state.name });
           // Subscribe to device command topics
           sub(T_cmd_any(state.id));
-          // If we have a session, re-subscribe and announce status
-          if (state.sessionId) {
-            sub(`sessions/${state.sessionId}/commands/+`);
-          }
+          // If we have a session, re-subscribe; also try to discover ongoing session and journeys
+          if (state.sessionId) { sub(`sessions/${state.sessionId}/commands/+`); }
+          try { fetchOngoingSessionDetails(); } catch {}
           // announce + status
           pub(T_discovery_announce(), JSON.stringify({ deviceId: state.id, type: state.type, name: state.name, metadata: {}, timestamp: new Date().toISOString() }), false);
           const statusPayload = { deviceId: state.id, type: state.type, status: 'active', positionMs: Math.floor(state.positionMs), sessionId: state.sessionId || '', timestamp: new Date().toISOString() };
@@ -318,16 +372,126 @@
       } catch (e) { log('Parse error: ' + e.message); }
     }
 
+    async function fetchOngoingSessionDetails() {
+      if (!backendBaseUrl) return;
+      try {
+        const url = `${backendBaseUrl}/api/sessions?status=on_going`;
+        const res = await fetch(url);
+        const json = await res.json();
+        const list = Array.isArray(json?.data?.data) ? json.data.data : (Array.isArray(json?.data) ? json.data : []);
+        const first = Array.isArray(list) && list.length ? list[0] : null;
+        if (!first) { document.getElementById('journeysList').textContent = 'No ongoing session.'; return; }
+        const sid = String(first.id || '').trim();
+        const stype = String(first.session_type || first?.data?.session_type || '').toLowerCase();
+        state.sessionType = stype;
+        if (sid && !state.sessionId) {
+          state.sessionId = sid; setK('s_session', `Session: ${sid}`);
+          try { localStorage.setItem('nsc_device_session', sid); } catch {}
+          sub(`sessions/${sid}/commands/+`);
+        }
+        // For individual mode, list ALL journeys from API; for group, use session's journeys
+        if (stype === 'individual') {
+          try {
+            const jr = await fetch(`${backendBaseUrl}/api/journeys?limit=500`);
+            const jjson = await jr.json();
+            const jlist = Array.isArray(jjson?.data?.data) ? jjson.data.data : (Array.isArray(jjson?.data) ? jjson.data : []);
+            state.journeys = jlist || [];
+          } catch (e) {
+            state.journeys = [];
+          }
+        } else {
+          const journeys = Array.isArray(first.journeys) ? first.journeys : (Array.isArray(first.data?.journeys) ? first.data.journeys : []);
+          state.journeys = journeys || [];
+        }
+        renderJourneys();
+        // Pick current journey: prefer existing state.journeyId else first
+        let targetJid = state.journeyId;
+        if (!targetJid && (state.journeys || []).length > 0) {
+          const one = state.journeys[0];
+          targetJid = one?.journey?.id != null ? String(one.journey.id) : '';
+        }
+        if (targetJid) selectAndLoadJourney(targetJid);
+      } catch (e) {
+        log('fetchOngoingSessionDetails error: ' + (e?.message || e));
+        document.getElementById('journeysList').textContent = 'Failed to load ongoing session.';
+      }
+    }
+
+    function renderJourneys() {
+      const el = document.getElementById('journeysList');
+      const arr = state.journeys || [];
+      if (!arr.length) { el.textContent = 'No journeys in session.'; return; }
+      el.innerHTML = '';
+      arr.forEach((j) => {
+        const jid = j?.journey?.id != null ? String(j.journey.id) : '';
+        const title = j?.video?.title || j?.journey?.title || `Journey ${jid}`;
+        const dur = j?.video?.duration_ms != null ? `${j.video.duration_ms} ms` : '-';
+        const vurl = j?.video?.url || j?.video?.video_url || '';
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.innerHTML = `
+          <div style="flex:1; min-width:200px;">
+            <div><strong>${title}</strong></div>
+            <div class="muted">ID: ${jid} · Duration: ${dur}</div>
+            <div class="muted" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:520px;">${vurl || ''}</div>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button data-jid="${jid}">Select</button>
+          </div>
+        `;
+        const btn = row.querySelector('button');
+        if (btn) btn.addEventListener('click', () => selectAndLoadJourney(jid));
+        el.appendChild(row);
+      });
+    }
+
+    function selectAndLoadJourney(jid) {
+      state.journeyId = String(jid || '');
+      setK('s_journey', `Journey: ${state.journeyId || '-'}`);
+      const arr = state.journeys || [];
+      const found = arr.find((j) => String(j?.journey?.id || '') === String(state.journeyId));
+      const vurl = found?.video?.url || found?.video?.video_url || '';
+      if (player && vurl) {
+        try {
+          player.pause();
+          player.src = vurl;
+          player.load();
+          player.currentTime = 0;
+          state.positionMs = 0;
+          setK('s_pos', 'Position: 0 ms');
+          log('Loaded journey video: ' + vurl);
+        } catch (e) { log('Video load error: ' + (e?.message || e)); }
+      }
+    }
+
     function handleCmd(data) {
       const cmd = (data.command || data.type || '').toLowerCase();
       if (cmd === 'start' || cmd === 'play') {
-        state.playing = true; if (typeof data.positionMs === 'number') state.positionMs = data.positionMs; setK('s_state', 'State: playing');
+        if (typeof data.positionMs === 'number') state.positionMs = data.positionMs;
+        if (player && player.src) {
+          try { if (typeof data.positionMs === 'number') player.currentTime = Math.max(0, data.positionMs / 1000); } catch {}
+          player.play().catch(() => {});
+        }
+        state.playing = true; setK('s_state', 'State: playing');
       } else if (cmd === 'pause') {
-        state.playing = false; if (typeof data.positionMs === 'number') state.positionMs = data.positionMs; setK('s_state', 'State: paused');
+        if (typeof data.positionMs === 'number') state.positionMs = data.positionMs;
+        if (player && player.src) {
+          try { if (typeof data.positionMs === 'number') player.currentTime = Math.max(0, data.positionMs / 1000); } catch {}
+          try { player.pause(); } catch {}
+        }
+        state.playing = false; setK('s_state', 'State: paused');
       } else if (cmd === 'seek') {
-        if (typeof data.positionMs === 'number') state.positionMs = data.positionMs; setK('s_state', 'State: seeking');
+        if (typeof data.positionMs === 'number') state.positionMs = data.positionMs;
+        if (player && player.src) {
+          try { player.currentTime = Math.max(0, (state.positionMs || 0) / 1000); } catch {}
+        }
+        setK('s_state', 'State: seeking');
       } else if (cmd === 'stop' || cmd === 'reset') {
-        state.playing = false; state.positionMs = 0; setK('s_state', 'State: stopped');
+        state.playing = false; state.positionMs = 0;
+        if (player && player.src) {
+          try { player.pause(); player.currentTime = 0; } catch {}
+        }
+        setK('s_state', 'State: stopped');
       } else if (cmd === 'calibrate') {
         setK('s_state', 'State: calibrating');
       } else if (cmd === 'join_session') {
@@ -335,6 +499,9 @@
         if (sid) { document.getElementById('sessionInput').value = sid; joinSession(); }
       } else if (cmd === 'leave_session') {
         leaveSession();
+      } else if (cmd === 'select_journey') {
+        const jid = (data.journeyId != null ? String(data.journeyId) : '').trim();
+        selectAndLoadJourney(jid);
       }
       setK('s_pos', `Position: ${Math.max(0, Math.floor(state.positionMs))} ms`);
       // Also emit a status update
@@ -346,7 +513,13 @@
     function startTicker() {
       if (ticker) return; state.lastTick = Date.now(); ticker = setInterval(() => {
         const now = Date.now(); const dt = now - state.lastTick; state.lastTick = now;
-        if (state.playing) { state.positionMs += dt; }
+        if (player && player.src) {
+          // Video clock drives position
+          const ms = (player.currentTime || 0) * 1000;
+          if (!Number.isNaN(ms)) state.positionMs = ms;
+        } else if (state.playing) {
+          state.positionMs += dt;
+        }
         setK('s_pos', `Position: ${Math.max(0, Math.floor(state.positionMs))} ms`);
         // Heartbeat roughly every 15s with some jitter
       }, 1000);

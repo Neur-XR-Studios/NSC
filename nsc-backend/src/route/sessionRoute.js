@@ -21,6 +21,11 @@ router.post('/:id/commands', controller.command);
 // Backward-compatible alias
 router.post('/:id/command', controller.command);
 
+// Participants (Individual flow)
+router.post('/:id/participants', controller.addParticipant);
+router.delete('/:id/participants/:pid', controller.removeParticipant);
+router.post('/:id/participants/:pid/commands', controller.commandParticipant);
+
 // Update session metadata (type, journey, participants, etc.)
 router.patch('/:id', controller.update);
 

@@ -41,14 +41,12 @@ export default function DeviceSelectionStep({
     !!selectedVrId &&
     !!selectedChairId &&
     !pairedVrIds.has(selectedVrId) &&
-    !pairedChairIds.has(selectedChairId) &&
-    !(sessionType === "individual" && pairs.length >= 1);
+    !pairedChairIds.has(selectedChairId);
 
-  const canContinue =
-    (sessionType === "individual" && pairs.length === 1) || (sessionType === "group" && pairs.length >= 1);
+  const canContinue = pairs.length >= 1;
 
   return (
-    <div className="max-w-7xl mx-auto">
+    <div className="mx-auto">
       <Card className="bg-slate-900/50 border-slate-800">
         <CardHeader className="border-b border-slate-800 pb-4">
           <div className="flex items-center justify-between">
@@ -56,8 +54,8 @@ export default function DeviceSelectionStep({
               <CardTitle className="text-white text-xl mb-1">Device Pairing</CardTitle>
               <p className="text-slate-400 text-sm">
                 {sessionType === "individual" 
-                  ? "Select one VR headset and one chair" 
-                  : "Create multiple VR-chair pairs for your group session"}
+                  ? "Create one or more VR–chair pairs. Journeys are chosen on devices."
+                  : "Create multiple VR–chair pairs for your group session and pick journeys next."}
               </p>
             </div>
             <Button 
@@ -265,7 +263,7 @@ export default function DeviceSelectionStep({
                   disabled={!canContinue}
                   className="gap-2 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-700 hover:to-cyan-700 text-white px-8 py-3 rounded-lg font-semibold shadow-lg text-base disabled:opacity-40"
                 >
-                  Continue to Journey Selection
+                  {sessionType === "individual" ? "Continue to Controller" : "Continue to Journey Selection"}
                   <ChevronRight className="w-5 h-5" />
                 </Button>
               </div>

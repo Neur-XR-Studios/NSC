@@ -17,7 +17,7 @@ class SessionService {
       if (!vrDeviceId) errors.missingFields.push('vrDeviceId');
     }
 
-    if (journeys.length === 0) errors.missingFields.push('journeyIds');
+    if (type === 'group' && journeys.length === 0) errors.missingFields.push('journeyIds');
 
     if (vrDeviceId) {
       // Try by new string ID first (VR_#001 format), then fallback to hardware deviceId
@@ -186,8 +186,8 @@ class SessionService {
   /**
    * Send a command to a session and persist session state updates
    */
-  async commandAndUpdate({ sessionId, cmd, positionMs, durationMs }) {
-    const send = this.commandSession({ sessionId, cmd, positionMs, durationMs });
+  async commandAndUpdate({ sessionId, cmd, positionMs, durationMs, journeyId }) {
+    const send = this.commandSession({ sessionId, cmd, positionMs, durationMs, journeyId });
     const result = await send;
 
     const session = await Session.findByPk(sessionId);
@@ -208,6 +208,9 @@ class SessionService {
           break;
         case 'sync':
           await session.update({ last_command: 'sync' });
+          break;
+        case 'select_journey':
+          await session.update({ last_command: 'select_journey' });
           break;
         default:
           break;
@@ -563,7 +566,7 @@ class SessionService {
   }
 
 
-  commandSession({ sessionId, cmd, positionMs, durationMs }) {
+  commandSession({ sessionId, cmd, positionMs, durationMs, journeyId }) {
     // Publish per-command topic to align with clients: sessions/<sessionId>/commands/<cmd>
     const topic = `sessions/${sessionId}/commands/${cmd}`;
     const applyAtMs = Date.now() + 1500; // small buffer for sync
@@ -583,6 +586,9 @@ class SessionService {
         break;
       case 'sync':
         payload = { cmd: 'sync', serverTimeMs: Date.now() };
+        break;
+      case 'select_journey':
+        payload = { cmd: 'select_journey', journeyId, applyAtMs };
         break;
       default:
         return { statusCode: httpStatus.BAD_REQUEST, response: { status: false, message: 'Invalid cmd' } };
@@ -645,6 +651,121 @@ class SessionService {
     await Session.destroy({ where: { id: sessionId } });
 
     return { statusCode: httpStatus.OK, response: { status: true, message: 'Session deleted' } };
+  }
+
+  // Create a participant (VR + Chair) for a session and announce join_session
+  async addParticipant(sessionId, { vrDeviceId, chairDeviceId, language }) {
+    const errors = { missingFields: [], notFoundDevices: [] };
+    if (!vrDeviceId) errors.missingFields.push('vrDeviceId');
+    if (!chairDeviceId) errors.missingFields.push('chairDeviceId');
+
+    const session = await Session.findByPk(sessionId);
+    if (!session) {
+      return { statusCode: httpStatus.NOT_FOUND, response: { status: false, message: 'Session not found' } };
+    }
+
+    const vr = vrDeviceId ? await VRDevice.findByPk(vrDeviceId) || await VRDevice.findOne({ where: { deviceId: vrDeviceId } }) : null;
+    const chair = chairDeviceId ? await ChairDevice.findByPk(chairDeviceId) || await ChairDevice.findOne({ where: { deviceId: chairDeviceId } }) : null;
+    if (!vr && vrDeviceId) errors.notFoundDevices.push({ field: 'vrDeviceId', value: vrDeviceId });
+    if (!chair && chairDeviceId) errors.notFoundDevices.push({ field: 'chairDeviceId', value: chairDeviceId });
+
+    if (errors.missingFields.length || errors.notFoundDevices.length) {
+      return { statusCode: httpStatus.BAD_REQUEST, response: { status: false, message: 'Validation failed', errors } };
+    }
+
+    const participant = await SessionParticipant.create({
+      id: uuidv4(),
+      session_id: session.id,
+      vr_device_id: vr.id,
+      chair_device_id: chair.id,
+      language: language || null,
+      joined_at: new Date(),
+    });
+
+    // Broadcast join_session to devices
+    try {
+      const ts = new Date().toISOString();
+      const payload = { sessionId: session.id, journeyId: session.journey_ids || [], timestamp: ts };
+      if (vr?.deviceId) mqttService.publish(`devices/${vr.deviceId}/commands/join_session`, payload, { qos: 1, retain: false });
+      if (chair?.deviceId) mqttService.publish(`devices/${chair.deviceId}/commands/join_session`, payload, { qos: 1, retain: false });
+      try { if (vr?.deviceId) global.io?.emit('mqtt_message', { topic: `devices/${vr.deviceId}/commands/join_session`, payload }); } catch { /* noop */ }
+      try { if (chair?.deviceId) global.io?.emit('mqtt_message', { topic: `devices/${chair.deviceId}/commands/join_session`, payload }); } catch { /* noop */ }
+    } catch { /* noop */ }
+
+    return { statusCode: httpStatus.OK, response: { status: true, data: participant } };
+  }
+
+  // Remove participant and send leave_session to devices
+  async removeParticipant(sessionId, participantId) {
+    const participant = await SessionParticipant.findByPk(participantId, { include: [{ model: VRDevice, as: 'vr' }, { model: ChairDevice, as: 'chair' }] });
+    if (!participant || participant.session_id !== sessionId) {
+      return { statusCode: httpStatus.NOT_FOUND, response: { status: false, message: 'Participant not found' } };
+    }
+    await SessionParticipant.destroy({ where: { id: participantId } });
+    try {
+      const payload = { cmd: 'leave_session', sessionId };
+      const vrHw = participant.vr?.deviceId || null;
+      const chairHw = participant.chair?.deviceId || null;
+      if (vrHw) mqttService.publish(`devices/${vrHw}/commands/leave_session`, payload, { qos: 1, retain: false });
+      if (chairHw) mqttService.publish(`devices/${chairHw}/commands/leave_session`, payload, { qos: 1, retain: false });
+      try { if (vrHw) global.io?.emit('mqtt_message', { topic: `devices/${vrHw}/commands/leave_session`, payload }); } catch { }
+      try { if (chairHw) global.io?.emit('mqtt_message', { topic: `devices/${chairHw}/commands/leave_session`, payload }); } catch { }
+    } catch { /* noop */ }
+    return { statusCode: httpStatus.OK, response: { status: true, message: 'Participant removed' } };
+  }
+
+  // Participant-scoped command
+  async commandParticipant({ sessionId, participantId, cmd, positionMs, durationMs, journeyId }) {
+    const participant = await SessionParticipant.findByPk(participantId, { include: [{ model: VRDevice, as: 'vr' }, { model: ChairDevice, as: 'chair' }] });
+    if (!participant || participant.session_id !== sessionId) {
+      return { statusCode: httpStatus.NOT_FOUND, response: { status: false, message: 'Participant not found' } };
+    }
+
+    // Publish participant topic
+    const topic = `sessions/${sessionId}/participants/${participantId}/commands/${cmd}`;
+    const applyAtMs = Date.now() + 1500;
+    let payload;
+    switch (cmd) {
+      case 'start':
+        payload = { cmd: 'start', startAtMs: applyAtMs, durationMs };
+        break;
+      case 'pause':
+        payload = { cmd: 'pause', positionMs };
+        break;
+      case 'stop':
+        payload = { cmd: 'stop' };
+        break;
+      case 'seek':
+        payload = { cmd: 'seek', positionMs, applyAtMs };
+        break;
+      case 'sync':
+        payload = { cmd: 'sync', serverTimeMs: Date.now() };
+        break;
+      case 'select_journey':
+        payload = { cmd: 'select_journey', journeyId, applyAtMs };
+        break;
+      default:
+        return { statusCode: httpStatus.BAD_REQUEST, response: { status: false, message: 'Invalid cmd' } };
+    }
+
+    mqttService.publish(topic, payload, { qos: 1, retain: false });
+    try { global.io?.emit('mqtt_message', { topic, payload }); } catch { }
+
+    // Mirror to both device topics for compatibility
+    const vrHw = participant.vr?.deviceId || null;
+    const chairHw = participant.chair?.deviceId || null;
+    try {
+      if (vrHw) {
+        mqttService.publish(`devices/${vrHw}/commands/${cmd}`, { ...payload, sessionId }, { qos: 1, retain: false });
+        try { global.io?.emit('mqtt_message', { topic: `devices/${vrHw}/commands/${cmd}`, payload: { ...payload, sessionId } }); } catch { }
+      }
+      if (chairHw) {
+        mqttService.publish(`devices/${chairHw}/commands/${cmd}`, { ...payload, sessionId }, { qos: 1, retain: false });
+        try { global.io?.emit('mqtt_message', { topic: `devices/${chairHw}/commands/${cmd}`, payload: { ...payload, sessionId } }); } catch { }
+      }
+    } catch { /* noop */ }
+
+    return { statusCode: httpStatus.OK, response: { status: true, data: { topic, payload } } };
   }
 }
 

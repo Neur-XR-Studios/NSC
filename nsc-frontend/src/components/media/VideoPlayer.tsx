@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, forwardRef, useImperativeHandle } from "react";
 import { Play, Pause, Volume2, VolumeX, Maximize } from "lucide-react";
 
-interface VideoPlayerProps {
+export interface VideoPlayerProps {
   src: string;
   poster?: string;
   className?: string;
@@ -11,11 +11,20 @@ interface VideoPlayerProps {
   isShowFullscreen?: boolean;
   ontogglePlay?: (playing: boolean) => void;
   onTimeUpdateRes?: (progress: number) => void;
+  onTimeUpdateMs?: (ms: number) => void;
+  onDurationMs?: (ms: number) => void;
   externalCurrentMs?: number;
   externalPlaying?: boolean;
 }
 
-export const VideoPlayer: React.FC<VideoPlayerProps> = ({
+export type VideoPlayerHandle = {
+  play: () => void;
+  pause: () => void;
+  seekTo: (ms: number) => void;
+  getCurrentTimeMs: () => number;
+};
+
+const VideoPlayerInner: React.ForwardRefRenderFunction<VideoPlayerHandle, VideoPlayerProps> = ({
   src,
   poster,
   className,
@@ -25,9 +34,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   isShowFullscreen = true,
   ontogglePlay,
   onTimeUpdateRes,
+  onTimeUpdateMs,
+  onDurationMs,
   externalCurrentMs,
   externalPlaying,
-}) => {
+}, ref) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [playing, setPlaying] = useState(isAutoPlay);
@@ -35,6 +46,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [volume, setVolume] = useState(1);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
+
+  useImperativeHandle(ref, () => ({
+    play: () => {
+      const el = videoRef.current;
+      if (!el) return;
+      el.play().catch(() => {});
+    },
+    pause: () => {
+      const el = videoRef.current;
+      if (!el) return;
+      el.pause();
+    },
+    seekTo: (ms: number) => {
+      const el = videoRef.current;
+      if (!el) return;
+      el.currentTime = Math.max(0, (ms || 0) / 1000);
+    },
+    getCurrentTimeMs: () => {
+      const el = videoRef.current;
+      return el ? (el.currentTime || 0) * 1000 : 0;
+    },
+  }), []);
 
   const togglePlay = () => {
     const el = videoRef.current;
@@ -55,12 +88,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!el) return;
     setProgress((el.currentTime / (el.duration || 1)) * 100);
     onTimeUpdateRes?.((el.currentTime / (el.duration || 1)) * 100);
+    onTimeUpdateMs?.((el.currentTime || 0) * 1000);
   };
 
   const onLoadedMetadata = () => {
     const el = videoRef.current;
     if (!el) return;
     setDuration(el.duration || 0);
+    onDurationMs?.(((el.duration || 0) * 1000));
   };
 
   const onSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -70,6 +105,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     el.currentTime = (pct / 100) * (el.duration || 0);
     setProgress(pct);
     onTimeUpdateRes?.((el.currentTime / (el.duration || 1)) * 100);
+    onTimeUpdateMs?.((el.currentTime || 0) * 1000);
   };
 
   const toggleMute = () => {
@@ -226,3 +262,5 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     </div>
   );
 };
+
+export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(VideoPlayerInner);

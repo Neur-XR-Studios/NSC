@@ -17,6 +17,44 @@ class SessionController {
     }
   };
 
+  // Create a participant in a session
+  addParticipant = async (req, res) => {
+    try {
+      const sessionId = req.params.id;
+      const result = await this.service.addParticipant(sessionId, req.body || {});
+      return res.status(result.statusCode).send(result.response);
+    } catch (e) {
+      logger.error(e);
+      return res.status(httpStatus.BAD_GATEWAY).send({ status: false, message: e.message });
+    }
+  };
+
+  // Remove a participant from a session
+  removeParticipant = async (req, res) => {
+    try {
+      const sessionId = req.params.id;
+      const participantId = req.params.pid;
+      const result = await this.service.removeParticipant(sessionId, participantId);
+      return res.status(result.statusCode).send(result.response);
+    } catch (e) {
+      logger.error(e);
+      return res.status(httpStatus.BAD_GATEWAY).send({ status: false, message: e.message });
+    }
+  };
+
+  // Send a command to a specific participant
+  commandParticipant = async (req, res) => {
+    try {
+      const sessionId = req.params.id;
+      const participantId = req.params.pid;
+      const result = await this.service.commandParticipant({ sessionId, participantId, ...req.body });
+      return res.status(result.statusCode).send(result.response);
+    } catch (e) {
+      logger.error(e);
+      return res.status(httpStatus.BAD_GATEWAY).send({ status: false, message: e.message });
+    }
+  };
+
   // Retrieve a single session by ID
   getById = async (req, res) => {
     try {

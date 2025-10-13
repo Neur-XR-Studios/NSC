@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { realtime } from "@/lib/realtime";
 import api from "@/lib/axios";
 import type { JourneyItem } from "@/types/journey";
-import { createGroupSession, createIndividualSession, commandSession, type SessionType } from "@/lib/sessions";
+import { createGroupSession, createIndividualSession, commandSession, addParticipant, getSessionById, type SessionType } from "@/lib/sessions";
 import ProgressStepper from "./components/ProgressStepper";
 import SessionTypeStep from "./components/steps/SessionTypeStep";
 import JourneySelectionStep from "./components/steps/JourneySelectionStep";
@@ -91,7 +91,6 @@ export default function DeviceControlPanel() {
   const [currentStep, setCurrentStep] = useState<FlowStep>("session-type");
   const [sessionType, setSessionType] = useState<SessionType | null>(null);
   const [selectedJourneyIds, setSelectedJourneyIds] = useState<string[]>([]);
-  const [hasOngoingSession, setHasOngoingSession] = useState<boolean>(false);
 
   // Logs
   const [logs, setLogs] = useState<string[]>([]);
@@ -133,9 +132,20 @@ export default function DeviceControlPanel() {
         if (Array.isArray(list) && list.length > 0) {
           const s: SessionRec = list[0]!;
           const sid: string = s.id;
-          const jids: number[] = Array.isArray(s.journey_ids) ? s.journey_ids! : [];
-          const participants: ParticipantRec[] = Array.isArray(s.participants) ? s.participants! : [];
-          const seededPairs = participants
+          let jids: number[] = Array.isArray(s.journey_ids) ? s.journey_ids! : [];
+          let participants: ParticipantRec[] = Array.isArray(s.participants) ? s.participants! : [];
+          // If participants are missing in list payload, fetch session details (fallback)
+          if (!participants || participants.length === 0) {
+            try {
+              const det = await getSessionById(sid);
+              jids = Array.isArray(det?.data?.journey_ids) ? (det!.data!.journey_ids as number[]) : jids;
+              participants = Array.isArray(det?.data?.participants) ? (det!.data!.participants as ParticipantRec[]) : [];
+            } catch (e) {
+              const message = e instanceof Error ? e.message : String(e);
+              log(`Fallback session details load failed: ${message}`);
+            }
+          }
+          const seededPairs = (participants || [])
             .filter((m) => m.vr_device_id && m.chair_device_id)
             .map((m) => ({ sessionId: sid, vrId: String(m.vr_device_id), chairId: String(m.chair_device_id), journeyId: jids }));
           if (seededPairs.length > 0) {
@@ -143,21 +153,17 @@ export default function DeviceControlPanel() {
             setActiveSessionId(sid);
             setSelectedJourneyIds(jids.map((x) => String(x)));
             setSessionType((s.session_type as SessionType) || null);
-            setHasOngoingSession(true);
             // Ensure journeys are populated when jumping straight into controller
             void loadJourneys();
             setCurrentStep("controller");
           }
-        } else {
-          setHasOngoingSession(false);
         }
       } catch {
         // ignore fetch errors; remain in flow
-        setHasOngoingSession(false);
       }
     };
     void loadOngoing();
-  }, [loadJourneys]);
+  }, [loadJourneys, log]);
 
   useEffect(() => {
     if (logBoxRef.current) {
@@ -452,6 +458,19 @@ export default function DeviceControlPanel() {
     [pairs, publishTopic],
   );
 
+  // Participant-scoped device command (used for Individual flow without participantId)
+  const sendParticipantCmd = useCallback(
+    (pair: { vrId: string; chairId: string }, type: "play" | "pause" | "seek" | "stop", positionMs?: number) => {
+      const payload = {
+        positionMs: Number(positionMs || 0),
+        timestamp: new Date().toISOString(),
+      };
+      publishTopic(`devices/${pair.vrId}/commands/${type}`, JSON.stringify(payload), false);
+      publishTopic(`devices/${pair.chairId}/commands/${type}`, JSON.stringify(payload), false);
+    },
+    [publishTopic],
+  );
+
   const resetFlow = useCallback(() => {
     setSelectedVrId("");
     setSelectedChairId("");
@@ -470,31 +489,38 @@ export default function DeviceControlPanel() {
 
   const handleCreateIndividual = useCallback(async () => {
     try {
-      const only = pairs[0];
-      if (!only || !selectedJourneyIds) return;
+      const first = pairs[0];
+      if (!first) return;
+      // Create base individual session with the first pair; journeys optional/omitted
       const rec = await createIndividualSession({
         session_type: "individual",
-        vrDeviceId: only.vrId,
-        chairDeviceId: only.chairId,
-        journeyId: selectedJourneyIds.map((id) => Number(id)),
+        vrDeviceId: first.vrId,
+        chairDeviceId: first.chairId,
       });
-      setPairs((prev) =>
-        prev.map((p, i) =>
-          i === 0 ? { ...p, sessionId: rec.id, journeyId: selectedJourneyIds.map((id) => Number(id)) } : p,
-        ),
-      );
-      setActiveSessionId(rec.id);
+      const sid = rec.id;
+      // Attach remaining pairs as participants
+      for (let i = 1; i < pairs.length; i++) {
+        const p = pairs[i]!;
+        try {
+          await addParticipant(sid, { vrDeviceId: p.vrId, chairDeviceId: p.chairId });
+        } catch (e) {
+          void e;
+        }
+      }
+      // Update local pairs with session id
+      setPairs((prev) => prev.map((p) => ({ ...p, sessionId: sid })));
+      setActiveSessionId(sid);
       setCurrentStep("controller");
-      log(`Individual session created: ${rec.id}`);
-      // After creation, instruct paired devices to join this session
-      broadcastSessionJoin(rec.id, [
-        { ...only, sessionId: rec.id, journeyId: selectedJourneyIds.map((id) => Number(id)) },
-      ]);
+      // Ensure journeys are loaded for Individual mode (chips list uses all journeys)
+      void loadJourneys();
+      log(`Individual session created: ${sid} with ${pairs.length} pair(s)`);
+      // Instruct all paired devices to join this session
+      broadcastSessionJoin(sid, pairs.map((p) => ({ ...p, sessionId: sid })));
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       log(`Create session failed: ${message}`);
     }
-  }, [pairs, selectedJourneyIds, log, broadcastSessionJoin]);
+  }, [pairs, log, broadcastSessionJoin, loadJourneys]);
 
   const handleCreateGroup = useCallback(async () => {
     try {
@@ -585,9 +611,13 @@ export default function DeviceControlPanel() {
               setPairs={(updater) => setPairs((prev) => updater(prev))}
               onBack={resetFlow}
               onContinue={() => {
-                void loadJourneys();
-                setSelectedJourneyIds([]);
-                setCurrentStep("journey-selection");
+                if (sessionType === "individual") {
+                  void handleCreateIndividual();
+                } else {
+                  void loadJourneys();
+                  setSelectedJourneyIds([]);
+                  setCurrentStep("journey-selection");
+                }
               }}
             />
           )}
@@ -615,15 +645,16 @@ export default function DeviceControlPanel() {
               seekValues={seekValues}
               setSeekValues={(updater) => setSeekValues((prev) => updater(prev))}
               sendCmd={sendCmd}
+              sendParticipantCmd={sendParticipantCmd}
               onNewSession={resetFlow}
               onResendSession={() => {
                 const targets = pairs.filter((p) => p.sessionId === activeSessionId);
                 if (activeSessionId && targets.length) broadcastSessionJoin(activeSessionId, targets);
               }}
               pairs={pairs}
+              setPairs={(updater) => setPairs((prev) => updater(prev))}
               onlineById={onlineById}
               deviceInfoById={deviceInfoById}
-              lockToExistingSession={hasOngoingSession}
               sessionType={sessionType}
             />
           )}

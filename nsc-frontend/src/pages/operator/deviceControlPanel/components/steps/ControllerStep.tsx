@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Armchair, Headset, PlayCircle, PauseCircle, ArrowLeft, Dot, CirclePower } from "lucide-react";
+import { Armchair, Headset, PlayCircle, Dot, CirclePower, PlayIcon, PauseIcon } from "lucide-react";
 import type { JourneyItem } from "@/types/journey";
-import { VideoPlayer } from "@/components/media/VideoPlayer";
+import { VideoPlayer, type VideoPlayerHandle } from "@/components/media/VideoPlayer";
+import { commandSession, commandParticipant, getSessionById, addParticipant as apiAddParticipant, removeParticipant as apiRemoveParticipant, type SessionDetailsEnvelope } from "@/lib/sessions";
 // removed customCss usage
 
 export type ActivePair = { sessionId: string; vrId: string; chairId: string; journeyId?: number[] } | null;
@@ -15,12 +16,14 @@ interface Props {
   seekValues: Record<string, number>;
   setSeekValues: (updater: (prev: Record<string, number>) => Record<string, number>) => void;
   sendCmd: (sessionId: string, type: "play" | "pause" | "seek" | "stop", positionMs?: number) => void;
+  sendParticipantCmd?: (pair: { vrId: string; chairId: string }, type: "play" | "pause" | "seek" | "stop", positionMs?: number) => void;
   onNewSession: () => void;
   onResendSession?: () => void;
   pairs?: Pair[];
+  setPairs?: (updater: (prev: Pair[]) => Pair[]) => void;
   onlineById?: Record<string, boolean>;
   deviceInfoById?: Record<string, { status?: string; positionMs?: number; sessionId?: string }>;
-  lockToExistingSession?: boolean;
+  // lockToExistingSession?: boolean;
   sessionType?: "individual" | "group" | null;
 }
 
@@ -33,25 +36,43 @@ export default function ControllerStep({
   onNewSession,
   onResendSession,
   pairs = [],
+  setPairs,
   onlineById = {},
   deviceInfoById = {},
-  lockToExistingSession = false,
+  // lockToExistingSession = false,
   sessionType = null,
+  sendParticipantCmd,
 }: Props) {
   // Per-participant audio selection state (declare hooks before any early return)
   const [audioSel, setAudioSel] = useState<Record<string, string>>({});
+  const [currentJourneyIdx, setCurrentJourneyIdx] = useState(0);
+  const [isSessionPlaying, setIsSessionPlaying] = useState(false);
   // console.log(onlineById);
 
   // For group sessions, collect all pairs in the same session for display
-  const sessionPairs = activePair ? pairs.filter((p) => p.sessionId && p.sessionId === activePair.sessionId) : [];
-  const journeyIdsAll = (
-    Array.isArray(activePair?.journeyId) ? activePair?.journeyId : activePair?.journeyId ? [activePair?.journeyId] : []
-  ) as number[];
-  const journeyCards = journeyIdsAll
-    .map((jid) => ({ jid, item: journeys.find((j) => String(j.journey?.id ?? j.video?.id ?? "") === String(jid)) }))
-    .filter((x) => !!x.item) as Array<{ jid: number; item: JourneyItem }>;
+  const sessionPairs = useMemo(
+    () => (activePair ? pairs.filter((p) => p.sessionId && p.sessionId === activePair.sessionId) : []),
+    [activePair, pairs],
+  );
+  const journeyIdsAll = useMemo(
+    () =>
+      (Array.isArray(activePair?.journeyId)
+        ? activePair?.journeyId
+        : activePair?.journeyId
+        ? [activePair?.journeyId]
+        : []) as number[],
+    [activePair?.journeyId],
+  );
+  const journeyCards = useMemo(
+    () =>
+      journeyIdsAll
+        .map((jid) => ({ jid, item: journeys.find((j) => String(j.journey?.id ?? j.video?.id ?? "") === String(jid)) }))
+        .filter((x) => !!x.item) as Array<{ jid: number; item: JourneyItem }>,
+    [journeyIdsAll, journeys],
+  );
 
-  const primaryMedia = journeyCards[0]?.item;
+  const currentCard = journeyCards[currentJourneyIdx] || journeyCards[0];
+  const primaryMedia = currentCard?.item;
   const durationMs = Number(primaryMedia?.video?.duration_ms || 0);
   const fmtMs = (ms?: number) => {
     const n = Math.max(0, Math.floor((ms || 0) / 1000));
@@ -69,48 +90,64 @@ export default function ControllerStep({
   // Slider drag state to avoid fighting auto updates while user is dragging
   const [dragging, setDragging] = useState(false);
   const pausedOnDragRef = useRef(false);
-  const optimisticRef = useRef(false);
   const manualPausedRef = useRef(false);
-  // Optimistic progress after Play is pressed (until devices report active)
-  useEffect(() => {
-    if (!activePair?.sessionId) return;
-    if (isPlaying) {
-      optimisticRef.current = false;
-      return;
-    }
-    if (!optimisticRef.current) return;
-    const id = setInterval(() => {
-      const cur = Number.isFinite(seekValues[activePair.sessionId]) ? seekValues[activePair.sessionId] : 0;
-      const next = Math.min(durationMs || 0, cur + 500);
-      setSeekValues((prev) => ({ ...prev, [activePair.sessionId]: next }));
-      if (next >= (durationMs || 0)) optimisticRef.current = false;
-    }, 800);
-    return () => clearInterval(id);
-  }, [activePair?.sessionId, isPlaying, durationMs, seekValues, setSeekValues, optimisticRef]);
+  const playerRefs = useRef<Record<string, VideoPlayerHandle | null>>({});
+  const [participantIdByPair, setParticipantIdByPair] = useState<Record<string, string>>({});
+  const [selectedJourneyByPair, setSelectedJourneyByPair] = useState<Record<string, number>>({});
+  const [newVrId, setNewVrId] = useState("");
+  const [newChairId, setNewChairId] = useState("");
 
-  // Device-driven auto update of slider when playing (disabled if a manual pause is pending)
+  const didInitRef = useRef(false);
   useEffect(() => {
-    if (!activePair?.sessionId) return;
-    if (!isPlaying) return; // paused -> don't progress automatically
-    if (manualPausedRef.current) return; // local pause override
-    if (dragging) return; // user is dragging -> don't overwrite
-    const id = setInterval(() => {
-      const vrPos = deviceInfoById[activePair.vrId]?.positionMs;
-      const chPos = deviceInfoById[activePair.chairId]?.positionMs;
-      const pos = typeof vrPos === "number" ? vrPos : typeof chPos === "number" ? chPos : 0;
-      setSeekValues((prev) => ({ ...prev, [activePair.sessionId]: Math.max(0, Math.min(durationMs || 0, pos)) }));
-    }, 800);
-    return () => clearInterval(id);
-  }, [
-    activePair?.sessionId,
-    activePair?.vrId,
-    activePair?.chairId,
-    isPlaying,
-    dragging,
-    durationMs,
-    deviceInfoById,
-    setSeekValues,
-  ]);
+    if (didInitRef.current) return;
+    setCurrentJourneyIdx(0);
+    if (activePair) {
+      setSeekValues((prev) => ({ ...prev, [activePair.sessionId]: 0 }));
+      // For group sessions, default-select the first journey across the group
+      if (sessionType === "group") {
+        const journeyIdsAlls = (
+          Array.isArray(activePair?.journeyId)
+            ? activePair?.journeyId
+            : activePair?.journeyId
+            ? [activePair?.journeyId]
+            : []
+        ) as number[];
+        sessionPairs.forEach((sp) => {
+          const key = `${sp.vrId}-${sp.chairId}`;
+          playerRefs.current[key]?.pause?.();
+          playerRefs.current[key]?.seekTo?.(0);
+        });
+        if (journeyIdsAlls.length > 0) {
+          const target = journeyCards[0];
+          commandSession(activePair.sessionId, "select_journey", { journeyId: target?.jid }).catch(() => {});
+        }
+      }
+    }
+    didInitRef.current = true;
+  }, [activePair, journeyCards, sessionPairs, sessionType, setSeekValues]);
+
+  // Build participantId mapping for Individual sessions
+  useEffect(() => {
+    const sid = activePair?.sessionId;
+    if (!sid || sessionType !== "individual") return;
+    const load = async () => {
+      try {
+        const res: SessionDetailsEnvelope = await getSessionById(sid);
+        const parts = res?.data?.participants || [];
+        const map: Record<string, string> = {};
+        parts.forEach((m) => {
+          const vr = String(m.vr_device_id || "");
+          const ch = String(m.chair_device_id || "");
+          const pid = String(m.id || "");
+          if (vr && ch && pid) map[`${vr}-${ch}`] = pid;
+        });
+        setParticipantIdByPair(map);
+      } catch (e) {
+        void e;
+      }
+    };
+    void load();
+  }, [activePair?.sessionId, sessionType]);
 
   // Clear manual pause override once devices report not playing
   useEffect(() => {
@@ -137,63 +174,109 @@ export default function ControllerStep({
                   Resend Session ID
                 </Button>
               </div>
+          {sessionType === "individual" && (
+            <div className="mt-3 flex items-end gap-2">
+              <div>
+                <div className="text-xs text-slate-400">Add Pair - VR ID</div>
+                <input
+                  value={newVrId}
+                  onChange={(e) => setNewVrId(e.target.value)}
+                  placeholder="VR_..."
+                  className="bg-slate-900 border border-slate-700 text-xs text-slate-200 rounded px-2 py-1"
+                />
+              </div>
+              <div>
+                <div className="text-xs text-slate-400">Chair ID</div>
+                <input
+                  value={newChairId}
+                  onChange={(e) => setNewChairId(e.target.value)}
+                  placeholder="CHAIR_..."
+                  className="bg-slate-900 border border-slate-700 text-xs text-slate-200 rounded px-2 py-1"
+                />
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-2 py-0 text-xs border-slate-700 text-slate-300 hover:bg-slate-800"
+                onClick={async () => {
+                  const sid = activePair?.sessionId;
+                  if (!sid || !newVrId || !newChairId || !setPairs) return;
+                  try {
+                    await apiAddParticipant(sid, { vrDeviceId: newVrId, chairDeviceId: newChairId });
+                    setPairs((prev) => [...prev, { sessionId: sid, vrId: newVrId, chairId: newChairId, journeyId: [] }]);
+                    setNewVrId(""); setNewChairId("");
+                  } catch (e) {
+                    void e;
+                  }
+                }}
+              >
+                Add Pair
+              </Button>
+            </div>
+          )}
             </div>
 
             <Button
-              variant="outline"
-              size="sm"
-              onClick={!lockToExistingSession ? onNewSession : undefined}
-              disabled={lockToExistingSession}
-              title={
-                lockToExistingSession ? "An ongoing session is active; cannot start a new one" : "Start a new session"
-              }
-              className="gap-2 border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+              onClick={() => {
+                if (!activePair) return;
+                sendCmd(activePair.sessionId, "stop");
+                onNewSession();
+              }}
+              variant="destructive"
+              className="gap-2 text-base font-semibold"
             >
-              <ArrowLeft className="w-4 h-4" />
-              New Session
+              <CirclePower className="w-5 h-5" /> Stop Session
             </Button>
           </div>
           <div className="flex items-center justify-center gap-6">
-            <div className="grid grid-cols-3 justify-center items-center gap-3 w-[30%]">
-              <Button
-                onClick={() => {
-                  if (!activePair) return;
-                  // Start optimistic progress from current value
-                  manualPausedRef.current = false;
-                  optimisticRef.current = true;
-                  sendCmd(activePair.sessionId, "play");
-                }}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2 text-base font-semibold"
-              >
-                <PlayCircle className="w-5 h-5" />
-              </Button>
-              <Button
-                onClick={() => {
-                  if (!activePair) return;
-                  manualPausedRef.current = true;
-                  const cur = Number.isFinite(seekValues[activePair.sessionId]) ? seekValues[activePair.sessionId] : 0;
-                  // stop optimistic progression immediately
-                  optimisticRef.current = false;
-                  sendCmd(activePair.sessionId, "pause", cur);
-                }}
-                className="bg-amber-600 hover:bg-amber-700 text-white gap-2 text-base font-semibold"
-              >
-                <PauseCircle className="w-5 h-5" />
-              </Button>
-              <Button
-                onClick={() => activePair && sendCmd(activePair.sessionId, "stop")}
-                variant="destructive"
-                className="gap-2 text-base font-semibold"
-              >
-                <CirclePower className="w-5 h-5" />
-              </Button>
-            </div>
-            <div className="flex items-center gap-3 w-[70%]">
+            <div className="flex items-center gap-3 w-[100%]">
               {activePair && (
                 <>
-                  <div className="flex-1 flex flex-col gap-1">
+                  <div className="flex-1 flex items-center gap-3 pointer-events-auto m-2 rounded-md bg-gradient-to-t from-black/70 to-black/10 p-2 backdrop-blur-sm border border-white/10">
+                    {!isSessionPlaying ? (
+                      <Button
+                        onClick={() => {
+                          if (!activePair) return;
+                          manualPausedRef.current = false;
+                          // locally start playback for all visible players of this session for smoother UX
+                          sessionPairs.forEach((sp) => {
+                            const key = `${sp.vrId}-${sp.chairId}`;
+                            playerRefs.current[key]?.play?.();
+                          });
+                          setIsSessionPlaying(true);
+                          sendCmd(activePair.sessionId, "play");
+                        }}
+                        className="inline-flex items-center justify-center rounded bg-white/10 hover:bg-white/20 text-white"
+                      >
+                        <PlayIcon className="w-5 h-5" />
+                      </Button>
+                    ) : (
+                      <Button
+                        onClick={() => {
+                          if (!activePair) return;
+                          manualPausedRef.current = true;
+                          // pause locally and send pause with current time from any player if available
+                          let currentMs = Number.isFinite(seekValues[activePair.sessionId])
+                            ? (seekValues[activePair.sessionId] as number)
+                            : 0;
+                          const anyRef = Object.values(playerRefs.current).find(Boolean);
+                          if (anyRef && typeof anyRef.getCurrentTimeMs === "function") {
+                            currentMs = anyRef.getCurrentTimeMs();
+                          }
+                          sessionPairs.forEach((sp) => {
+                            const key = `${sp.vrId}-${sp.chairId}`;
+                            playerRefs.current[key]?.pause?.();
+                          });
+                          setIsSessionPlaying(false);
+                          sendCmd(activePair.sessionId, "pause", currentMs);
+                        }}
+                        className="inline-flex items-center justify-center rounded bg-white/10 hover:bg-white/20 text-white"
+                      >
+                        <PauseIcon className="w-5 h-5" />
+                      </Button>
+                    )}
                     {/* Hover tooltip */}
-                    <div className="relative">
+                    <div className="relative group w-full">
                       <input
                         type="range"
                         min={0}
@@ -222,6 +305,11 @@ export default function ControllerStep({
                           setDragging(false);
                           const val = Number((ev.target as HTMLInputElement).value || 0);
                           if (activePair) {
+                            // seek local players for this session for immediate feedback
+                            sessionPairs.forEach((sp) => {
+                              const key = `${sp.vrId}-${sp.chairId}`;
+                              playerRefs.current[key]?.seekTo?.(val);
+                            });
                             sendCmd(activePair.sessionId, "seek", val);
                           }
                           // keep paused; do not auto play after manual seek
@@ -231,6 +319,10 @@ export default function ControllerStep({
                           setDragging(false);
                           const val = Number((ev.target as HTMLInputElement).value || 0);
                           if (activePair) {
+                            sessionPairs.forEach((sp) => {
+                              const key = `${sp.vrId}-${sp.chairId}`;
+                              playerRefs.current[key]?.seekTo?.(val);
+                            });
                             sendCmd(activePair.sessionId, "seek", val);
                           }
                           // keep paused; do not auto play after manual seek
@@ -253,29 +345,115 @@ export default function ControllerStep({
                       />
                       <div
                         data-tip
-                        className="pointer-events-none absolute -top-6 bg-black/70 text-white text-[10px] px-2 py-0.5 rounded translate-x-[-50%]"
+                        className="pointer-events-none absolute -top-6 bg-black/70 text-white text-[10px] px-2 py-0.5 rounded translate-x-[-50%] group-hover:block hidden"
                       ></div>
                     </div>
-                    <div className="flex items-center justify-between text-xs text-slate-400">
-                      <span>{fmtMs(seekValues[activePair.sessionId])}</span>
-                      <span>{fmtMs(durationMs)}</span>
+                    <div className="flex items-center justify-center gap-2 py-2 px-1 text-[14px] text-slate-400  w-[100px] text-bold ">
+                      <span className="flex items-center">
+                        {fmtMs(seekValues[activePair.sessionId])} / {fmtMs(durationMs)}
+                      </span>
                     </div>
                   </div>
-                  {/* Resume after manual seek */}
-                  {!isPlaying && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 px-3 py-0 text-xs border-slate-700 text-slate-300 hover:bg-slate-800"
-                      onClick={() => activePair && sendCmd(activePair.sessionId, "play")}
-                    >
-                      Resume
-                    </Button>
-                  )}
                 </>
               )}
             </div>
           </div>
+          {sessionType === "group" && (
+          <div className="flex items-center gap-2 ml-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 px-2 py-0 text-xs border-slate-700 text-slate-300 hover:bg-slate-800"
+              onClick={() => {
+                if (currentJourneyIdx <= 0) return;
+                const nextIdx = currentJourneyIdx - 1;
+                if (activePair) {
+                  const target = journeyCards[nextIdx];
+                  const ok =
+                    typeof window !== "undefined"
+                      ? window.confirm(`Switch to journey ${String(target?.jid ?? "")}?`)
+                      : true;
+                  if (ok && target) {
+                    commandSession(activePair.sessionId, "select_journey", { journeyId: target.jid }).catch(() => {});
+                  }
+                  setCurrentJourneyIdx(nextIdx);
+                  setSeekValues((prev) => ({ ...prev, [activePair.sessionId]: 0 }));
+                  sessionPairs.forEach((sp) => {
+                    const key = `${sp.vrId}-${sp.chairId}`;
+                    playerRefs.current[key]?.pause?.();
+                    playerRefs.current[key]?.seekTo?.(0);
+                  });
+                }
+              }}
+            >
+              Prev
+            </Button>
+            <div className="flex items-center gap-1">
+              {journeyCards.map((jc, idx) => (
+                <button
+                  key={`jc-${jc.jid}`}
+                  onClick={() => {
+                    if (activePair) {
+                      const ok =
+                        typeof window !== "undefined" ? window.confirm(`Switch to journey ${String(jc.jid)}?`) : true;
+                      if (ok) {
+                        commandSession(activePair.sessionId, "select_journey", { journeyId: jc.jid }).catch(() => {});
+                      }
+                      setCurrentJourneyIdx(idx);
+                      setSeekValues((prev) => ({ ...prev, [activePair.sessionId]: 0 }));
+                      sessionPairs.forEach((sp) => {
+                        const key = `${sp.vrId}-${sp.chairId}`;
+                        playerRefs.current[key]?.pause?.();
+                        playerRefs.current[key]?.seekTo?.(0);
+                      });
+                    }
+                  }}
+                  className={
+                    idx < currentJourneyIdx
+                      ? "px-2 py-1 rounded bg-emerald-700 text-white text-xs"
+                      : idx === currentJourneyIdx
+                      ? "px-2 py-1 rounded bg-cyan-700 text-white text-xs"
+                      : "px-2 py-1 rounded bg-slate-700 text-white text-xs"
+                  }
+                  title={String(jc.jid)}
+                >
+                  <div className="flex items-center gap-2">
+                    <img src={jc.item.video.thumbnail_url} alt="" className="w-8 h-8" />
+                    {String(jc.item.journey.title)}
+                  </div>
+                </button>
+              ))}
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 px-2 py-0 text-xs border-slate-700 text-slate-300 hover:bg-slate-800"
+              onClick={() => {
+                if (currentJourneyIdx >= journeyCards.length - 1) return;
+                const nextIdx = currentJourneyIdx + 1;
+                if (activePair) {
+                  const target = journeyCards[nextIdx];
+                  const ok =
+                    typeof window !== "undefined"
+                      ? window.confirm(`Switch to journey ${String(target?.jid ?? "")}?`)
+                      : true;
+                  if (ok && target) {
+                    commandSession(activePair.sessionId, "select_journey", { journeyId: target.jid }).catch(() => {});
+                    setCurrentJourneyIdx(nextIdx);
+                    setSeekValues((prev) => ({ ...prev, [activePair.sessionId]: 0 }));
+                    sessionPairs.forEach((sp) => {
+                      const key = `${sp.vrId}-${sp.chairId}`;
+                      playerRefs.current[key]?.pause?.();
+                      playerRefs.current[key]?.seekTo?.(0);
+                    });
+                  }
+                }
+              }}
+            >
+              Next
+            </Button>
+          </div>
+          )}
         </CardHeader>
         <CardContent className="pt-6 space-y-6">
           {/* All Participants (group) */}
@@ -286,8 +464,6 @@ export default function ControllerStep({
                 {sessionPairs.map((p, i) => {
                   const vrOnline = !!onlineById[p.vrId];
                   const chairOnline = !!onlineById[p.chairId];
-                  const vrInfo = deviceInfoById[p.vrId] || {};
-                  const chairInfo = deviceInfoById[p.chairId] || {};
                   const key = `${p.vrId}-${p.chairId}`;
                   // Media item: shared (group) or per-participant (individual)
                   const mediaItem =
@@ -301,10 +477,11 @@ export default function ControllerStep({
                   const tracks = mediaItem?.audio_tracks || [];
                   const defaultAudio = tracks[0]?.url || "";
                   const selSrc = audioSel[key] ?? defaultAudio;
-                  const currentMs =
-                    activePair && Number.isFinite(seekValues[activePair.sessionId])
-                      ? (seekValues[activePair.sessionId] as number)
-                      : 0;
+                  const seekKey = sessionType === "group" && activePair ? activePair.sessionId : key;
+                  const allJourneyCards = journeys
+                    .map((j) => ({ jid: Number(j?.journey?.id ?? j?.video?.id), item: j }))
+                    .filter((x) => Number.isFinite(x.jid)) as Array<{ jid: number; item: JourneyItem }>;
+                  const currentJid = selectedJourneyByPair[key] ?? (Array.isArray(p.journeyId) ? p.journeyId[0] : p.journeyId);
                   return (
                     <div
                       key={`${p.vrId}-${p.chairId}-${i}`}
@@ -313,32 +490,28 @@ export default function ControllerStep({
                       <div className="relative">
                         {vSrc ? (
                           <VideoPlayer
+                            ref={(inst: VideoPlayerHandle | null) => {
+                              const k = `${p.vrId}-${p.chairId}`;
+                              playerRefs.current[k] = inst;
+                            }}
                             src={vSrc}
                             className="w-full"
                             isMuted={true}
                             isShowVolume={false}
                             isShowFullscreen={false}
                             externalPlaying={!!isPlaying && !manualPausedRef.current}
-                            externalCurrentMs={currentMs}
+                            onTimeUpdateMs={(ms: number) => {
+                              if (!activePair?.sessionId) return;
+                              if (dragging) return;
+                              const clamped = Math.max(0, Math.min(durationMs || 0, Math.floor(ms || 0)));
+                              setSeekValues((prev) => ({ ...prev, [seekKey]: clamped }));
+                            }}
                           />
                         ) : (
                           <div className="w-full aspect-video bg-black/80 flex items-center justify-center">
                             <PlayCircle className="w-10 h-10 text-slate-700" />
                           </div>
                         )}
-                        {/* Device status/time overlay */}
-                        <div className="absolute top-2 left-2 space-y-1 text-[10px]">
-                          <div className="px-2 py-1 rounded bg-black/60 border border-white/10 text-slate-200 flex items-center gap-1">
-                            <Headset className="w-3 h-3 text-purple-300" />
-                            <span className="opacity-80">{vrInfo.status ?? "-"}</span>
-                            <span className="opacity-60">· {fmtMs(vrInfo.positionMs)}</span>
-                          </div>
-                          <div className="px-2 py-1 rounded bg-black/60 border border-white/10 text-slate-200 flex items-center gap-1">
-                            <Armchair className="w-3 h-3 text-blue-300" />
-                            <span className="opacity-80">{chairInfo.status ?? "-"}</span>
-                            <span className="opacity-60">· {fmtMs(chairInfo.positionMs)}</span>
-                          </div>
-                        </div>
                       </div>
                       <div className="p-3 flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
@@ -357,9 +530,7 @@ export default function ControllerStep({
                               <Dot className="w-4 h-4" />
                             </span>
                           </div>
-                          <div className="text-[10px] text-slate-400 ml-6">
-                            {vrInfo.status ?? "-"} · {fmtMs(vrInfo.positionMs)}
-                          </div>
+
                           <div className="flex items-center gap-2">
                             <Armchair className="w-4 h-4 text-blue-400" />
                             <span className="text-xs text-white font-medium truncate" title={p.chairId}>
@@ -375,10 +546,30 @@ export default function ControllerStep({
                               <Dot className="w-4 h-4" />
                             </span>
                           </div>
-                          <div className="text-[10px] text-slate-400 ml-6">
-                            {chairInfo.status ?? "-"} · {fmtMs(chairInfo.positionMs)}
-                          </div>
                         </div>
+                        {sessionType === "individual" && setPairs && (
+                          <div>
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              className="h-7 px-2 py-0 text-xs"
+                              onClick={async () => {
+                                const sid = activePair?.sessionId;
+                                const pid = participantIdByPair[key];
+                                if (!sid || !pid) return;
+                                try {
+                                  await apiRemoveParticipant(sid, pid);
+                                  setPairs((prev) => prev.filter((x) => !(x.vrId === p.vrId && x.chairId === p.chairId)));
+                                } catch (e) {
+                                  void e;
+                                }
+                              }}
+                            >
+                              Unpair
+                            </Button>
+                          </div>
+                        )}
+                      
                         {/* Audio controls */}
                         {tracks.length > 0 && (
                           <div className="flex items-center gap-2">
@@ -401,6 +592,87 @@ export default function ControllerStep({
                           </div>
                         )}
                       </div>
+                      {/* Participant journey selection (Individual) */}
+                      {sessionType === "individual" && (
+                        <div className="px-3 pb-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {allJourneyCards.map((jc) => (
+                              <button
+                                key={`${key}-jc-${jc.jid}`}
+                                onClick={() => {
+                                  const pid = participantIdByPair[key];
+                                  if (!pid || !activePair?.sessionId) return;
+                                  commandParticipant(activePair.sessionId, pid, "select_journey", { journeyId: jc.jid }).catch(() => {});
+                                  setSelectedJourneyByPair((prev) => ({ ...prev, [key]: jc.jid }));
+                                }}
+                                className={
+                                  Number(currentJid) === Number(jc.jid)
+                                    ? "px-2 py-1 rounded bg-cyan-700 text-white text-xs"
+                                    : "px-2 py-1 rounded bg-slate-700 text-white text-xs hover:bg-slate-600"
+                                }
+                                title={String(jc.jid)}
+                              >
+                                <div className="flex items-center gap-2">
+                                  <img src={jc.item.video.thumbnail_url} alt="" className="w-6 h-6" />
+                                  <span className="truncate max-w-[140px]">{String(jc.item.journey.title)}</span>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {/* Current journey banner */}
+                      {sessionType === "individual" && (
+                        <div className="px-3 pb-3 text-xs text-slate-300">
+                          Journey: {(() => {
+                            const j = journeys.find((x) => String(x?.journey?.id ?? x?.video?.id ?? "") === String(currentJid ?? ""));
+                            return j?.journey?.title || j?.video?.title || "-";
+                          })()}
+                        </div>
+                      )}
+                      {sessionType === "individual" && (
+                        <div className="px-3 pb-3 flex items-center gap-2">
+                          <Button
+                            onClick={() => {
+                              if (!sendParticipantCmd) return;
+                              sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "play");
+                            }}
+                            className="inline-flex items-center justify-center rounded bg-white/10 hover:bg-white/20 text-white h-8 px-2"
+                          >
+                            <PlayIcon className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            onClick={() => {
+                              if (!sendParticipantCmd) return;
+                              const pos = Number.isFinite(seekValues[seekKey]) ? seekValues[seekKey] : 0;
+                              sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "pause", pos);
+                            }}
+                            className="inline-flex items-center justify-center rounded bg-white/10 hover:bg-white/20 text-white h-8 px-2"
+                          >
+                            <PauseIcon className="w-4 h-4" />
+                          </Button>
+                          <input
+                            type="range"
+                            min={0}
+                            max={Math.max(0, durationMs)}
+                            step={100}
+                            value={Number.isFinite(seekValues[seekKey]) ? seekValues[seekKey] : 0}
+                            onChange={(ev) => {
+                              const val = Number(ev.target.value || 0);
+                              setSeekValues((prev) => ({ ...prev, [seekKey]: val }));
+                            }}
+                            onMouseUp={(ev) => {
+                              const val = Number((ev.target as HTMLInputElement).value || 0);
+                              if (sendParticipantCmd) {
+                                sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "seek", val);
+                              }
+                            }}
+                            className="w-full accent-cyan-500"
+                            aria-label="Seek position (participant)"
+                          />
+                          <span className="text-xs text-slate-400">{fmtMs(seekValues[seekKey])}</span>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
