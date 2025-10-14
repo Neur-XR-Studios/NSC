@@ -397,7 +397,7 @@ class SessionService {
       include: [
         { model: VRDevice, as: 'vr' },
         { model: ChairDevice, as: 'chair' },
-        // Participants removed as requested
+        // Note: Do not include participants here to avoid huge eager loads; we'll fetch them below
       ],
     });
 
@@ -513,7 +513,7 @@ class SessionService {
       });
     }
 
-    // VR & Chair devices (main session devices only — participants removed)
+    // VR & Chair devices (main session devices only — participants handled below)
     const vrDevices = [];
     const chairDevices = [];
 
@@ -551,6 +551,20 @@ class SessionService {
       }
     }
 
+    // Fetch participants and attach (for Individual sessions UI to hydrate pairs)
+    let participants = [];
+    try {
+      const rawParts = await SessionParticipant.findAll({
+        where: { session_id: plain.id },
+        include: [
+          { model: VRDevice, as: 'vr' },
+          { model: ChairDevice, as: 'chair' },
+        ],
+        order: [['joined_at', 'ASC']],
+      });
+      participants = rawParts.map((p) => (p.toJSON ? p.toJSON() : p));
+    } catch {}
+
     return {
       statusCode: httpStatus.OK,
       response: {
@@ -560,6 +574,7 @@ class SessionService {
           journeys: enrichedJourneys,
           vr: vrDevices,
           chair: chairDevices,
+          participants,
         },
       },
     };
@@ -764,6 +779,14 @@ class SessionService {
         try { global.io?.emit('mqtt_message', { topic: `devices/${chairHw}/commands/${cmd}`, payload: { ...payload, sessionId } }); } catch { }
       }
     } catch { /* noop */ }
+
+    // Persist participant's current journey selection if applicable
+    if (cmd === 'select_journey' && journeyId != null) {
+      try {
+        // if the column exists, update it; ignore errors silently otherwise
+        await participant.update({ current_journey_id: journeyId });
+      } catch {}
+    }
 
     return { statusCode: httpStatus.OK, response: { status: true, data: { topic, payload } } };
   }

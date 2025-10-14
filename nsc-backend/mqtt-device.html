@@ -42,8 +42,17 @@
     }
 
     // Device -> Admin events (user-triggered commands)
-    function sendEvent(evt) {
-      const payload = { deviceId: state.id, type: state.type, event: evt, positionMs: Math.floor(state.positionMs), sessionId: state.sessionId || '', timestamp: new Date().toISOString() };
+    function sendEvent(evt, extra) {
+      const payload = {
+        deviceId: state.id,
+        type: state.type,
+        event: evt,
+        positionMs: Math.floor(state.positionMs),
+        sessionId: state.sessionId || '',
+        journeyId: state.journeyId || '',
+        timestamp: new Date().toISOString(),
+        ...(extra || {})
+      };
       // Via bridge
       try { if (bridge && connected) bridge.emit('mqtt_publish', { topic: `devices/${state.id}/events`, payload: JSON.stringify(payload), options: { qos: 1, retain: false } }); } catch { }
       // Also publish over MQTT topic for parity
@@ -222,7 +231,7 @@
         </div>
       </div>
       <div style="margin-top:10px;">
-        <video id="player" style="width:100%; max-height:300px; background:#000;" playsinline muted></video>
+        <video id="player" style="width:100%; max-height:300px; background:#000;" playsinline muted controls></video>
       </div>
       <div class="muted" style="margin-top:6px; font-size:12px;">Note: This is a local test player. Devices should load their own media for a journey. Use this to verify command timing.</div>
     </div>
@@ -285,9 +294,19 @@
             setK('s_pos', `Position: ${Math.max(0, Math.floor(state.positionMs))} ms`);
           }
         });
-        player.addEventListener('play', () => { state.playing = true; setK('s_state', 'State: playing'); });
-        player.addEventListener('pause', () => { state.playing = false; setK('s_state', 'State: paused'); });
-        player.addEventListener('ended', () => { state.playing = false; setK('s_state', 'State: stopped'); });
+        player.addEventListener('play', () => {
+          state.playing = true; setK('s_state', 'State: playing');
+          // Notify admin/backend of local action
+          sendEvent('play');
+        });
+        player.addEventListener('pause', () => {
+          state.playing = false; setK('s_state', 'State: paused');
+          sendEvent('pause');
+        });
+        player.addEventListener('ended', () => {
+          state.playing = false; setK('s_state', 'State: stopped');
+          sendEvent('stop');
+        });
       }
       // Restore sessionId from storage if present
       try {
@@ -404,13 +423,15 @@
           state.journeys = journeys || [];
         }
         renderJourneys();
-        // Pick current journey: prefer existing state.journeyId else first
-        let targetJid = state.journeyId;
-        if (!targetJid && (state.journeys || []).length > 0) {
-          const one = state.journeys[0];
-          targetJid = one?.journey?.id != null ? String(one.journey.id) : '';
+        // For group sessions, auto-select a journey if none selected yet; for individual, let user choose
+        if (stype !== 'individual') {
+          let targetJid = state.journeyId;
+          if (!targetJid && (state.journeys || []).length > 0) {
+            const one = state.journeys[0];
+            targetJid = one?.journey?.id != null ? String(one.journey.id) : '';
+          }
+          if (targetJid) selectAndLoadJourney(targetJid);
         }
-        if (targetJid) selectAndLoadJourney(targetJid);
       } catch (e) {
         log('fetchOngoingSessionDetails error: ' + (e?.message || e));
         document.getElementById('journeysList').textContent = 'Failed to load ongoing session.';
@@ -420,6 +441,13 @@
     function renderJourneys() {
       const el = document.getElementById('journeysList');
       const arr = state.journeys || [];
+      // Update heading based on session type
+      try {
+        const header = el && el.parentElement ? el.parentElement.querySelector('h3') : null;
+        if (header) {
+          header.textContent = (state.sessionType === 'individual') ? 'Journeys (All Available)' : 'Journeys (from Session)';
+        }
+      } catch {}
       if (!arr.length) { el.textContent = 'No journeys in session.'; return; }
       el.innerHTML = '';
       arr.forEach((j) => {
@@ -460,6 +488,8 @@
           state.positionMs = 0;
           setK('s_pos', 'Position: 0 ms');
           log('Loaded journey video: ' + vurl);
+          // Notify journey selection (useful in individual sessions)
+          sendEvent('select_journey', { journeyId: state.journeyId });
         } catch (e) { log('Video load error: ' + (e?.message || e)); }
       }
     }

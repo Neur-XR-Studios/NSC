@@ -1,6 +1,9 @@
+import { useEffect, useMemo, useState } from "react";
+import type { AxiosResponse } from "axios";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertCircle, Armchair, ChevronRight, Headset, Plus, X, ArrowLeft } from "lucide-react";
+import api from "@/lib/axios";
 
 export type Device = { id: string; name: string; online: boolean; type?: string };
 export type Pair = { sessionId: string; vrId: string; chairId: string; journeyId?: number[] };
@@ -37,11 +40,40 @@ export default function DeviceSelectionStep({
   onBack,
   onContinue,
 }: Props) {
+  const [registeredVrIds, setRegisteredVrIds] = useState<string[]>([]);
+  const [registeredChairIds, setRegisteredChairIds] = useState<string[]>([]);
+
+  // Load registered device catalog once
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res: AxiosResponse<{ chairs: { id: string }[]; vr: { id: string }[] }> = await api.get("devices");
+        const root: { chairs: { id: string }[]; vr: { id: string }[] } = res.data;
+
+        const vr = root.vr.map((it: { id: string }) => it.id);
+        const chair = root.chairs.map((it: { id: string }) => it.id);
+
+        setRegisteredVrIds(vr);
+        setRegisteredChairIds(chair);
+      } catch (e) {
+        void e;
+      }
+    };
+    void load();
+  }, []);
+
+  console.log({ registeredVrIds, registeredChairIds });
+
+  const { vrRegistered, vrUnregistered, chairRegistered, chairUnregistered } = useMemo(() => {
+    const vrRegistered = vrDevices.filter((d) => registeredVrIds.includes(d.id));
+    const vrUnregistered = vrDevices.filter((d) => !registeredVrIds.includes(d.id));
+    const chairRegistered = chairDevices.filter((d) => registeredChairIds.includes(d.id));
+    const chairUnregistered = chairDevices.filter((d) => !registeredChairIds.includes(d.id));
+    return { vrRegistered, vrUnregistered, chairRegistered, chairUnregistered };
+  }, [vrDevices, chairDevices, registeredVrIds, registeredChairIds]);
+  
   const canAddPair =
-    !!selectedVrId &&
-    !!selectedChairId &&
-    !pairedVrIds.has(selectedVrId) &&
-    !pairedChairIds.has(selectedChairId);
+    !!selectedVrId && !!selectedChairId && !pairedVrIds.has(selectedVrId) && !pairedChairIds.has(selectedChairId);
 
   const canContinue = pairs.length >= 1;
 
@@ -53,15 +85,15 @@ export default function DeviceSelectionStep({
             <div>
               <CardTitle className="text-white text-xl mb-1">Device Pairing</CardTitle>
               <p className="text-slate-400 text-sm">
-                {sessionType === "individual" 
+                {sessionType === "individual"
                   ? "Create one or more VR–chair pairs. Journeys are chosen on devices."
                   : "Create multiple VR–chair pairs for your group session and pick journeys next."}
               </p>
             </div>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={onBack} 
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onBack}
               className="gap-2 border-slate-700 text-slate-300 hover:bg-slate-800"
             >
               <ArrowLeft className="w-4 h-4" />
@@ -81,7 +113,9 @@ export default function DeviceSelectionStep({
                   </div>
                   VR Headsets
                 </h3>
-                <span className="text-xs text-slate-500 font-medium">{vrDevices.length} Available</span>
+                <span className="text-xs text-slate-500 font-medium">
+                  {vrRegistered.length} Registered · {vrUnregistered.length} Unregistered
+                </span>
               </div>
 
               {vrDevices.length === 0 ? (
@@ -90,43 +124,71 @@ export default function DeviceSelectionStep({
                   <p className="text-slate-400 text-sm">No VR devices online</p>
                 </div>
               ) : (
-                <div className="grid grid-cols-3 gap-3 max-h-64 overflow-y-auto pr-1">
-                  {vrDevices.map((d) => {
-                    const selected = selectedVrId === d.id;
-                    const isPaired = pairedVrIds.has(d.id);
-                    return (
-                      <button
-                        key={d.id}
-                        type="button"
-                        onClick={() => !isPaired && setSelectedVrId(d.id)}
-                        disabled={isPaired}
-                        className={`relative text-left border rounded-lg p-3 transition-all ${
-                          isPaired
-                            ? "border-slate-800 bg-slate-900/40 opacity-40 cursor-not-allowed"
-                            : selected
-                            ? "border-purple-500 bg-purple-500/10 ring-2 ring-purple-500/20"
-                            : "border-slate-700 bg-slate-800/40 hover:bg-slate-800 hover:border-slate-600"
-                        }`}
-                      >
-                        <div className="flex flex-col gap-2">
-                          <div className="font-medium text-white text-sm truncate" title={d.name}>
-                            {d.name}
+                <>
+                  <div className="text-xs text-slate-400 mb-2">Registered</div>
+                  <div className="grid grid-cols-3 gap-3 max-h-64 overflow-y-auto pr-1 mb-4">
+                    {vrRegistered.map((d) => {
+                      const selected = selectedVrId === d.id;
+                      const isPaired = pairedVrIds.has(d.id);
+                      return (
+                        <button
+                          key={d.id}
+                          type="button"
+                          onClick={() => !isPaired && setSelectedVrId(d.id)}
+                          disabled={isPaired}
+                          className={`relative text-left border rounded-lg p-3 transition-all ${
+                            isPaired
+                              ? "border-slate-800 bg-slate-900/40 opacity-40 cursor-not-allowed"
+                              : selected
+                              ? "border-purple-500 bg-purple-500/10 ring-2 ring-purple-500/20"
+                              : "border-slate-700 bg-slate-800/40 hover:bg-slate-800 hover:border-slate-600"
+                          }`}
+                        >
+                          <div className="flex flex-col gap-2">
+                            <div className="font-medium text-white text-sm truncate" title={d.name}>
+                              {d.name}
+                            </div>
+                            <div className="text-xs text-slate-500 truncate" title={d.id}>
+                              {d.id}
+                            </div>
+                            <div
+                              className={`self-start px-2 py-0.5 rounded text-xs font-medium ${
+                                isPaired ? "bg-slate-700/50 text-slate-400" : "bg-emerald-500/20 text-emerald-400"
+                              }`}
+                            >
+                              {isPaired ? "Paired" : "Available"}
+                            </div>
                           </div>
-                          <div className="text-xs text-slate-500 truncate" title={d.id}>
-                            {d.id}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {vrUnregistered.length > 0 && (
+                    <>
+                      <div className="text-xs text-slate-400 mb-2">Unregistered (not selectable)</div>
+                      <div className="grid grid-cols-3 gap-3 max-h-48 overflow-y-auto pr-1">
+                        {vrUnregistered.map((d) => (
+                          <div
+                            key={d.id}
+                            className={`relative text-left border rounded-lg p-3 border-slate-800 bg-slate-900/40 opacity-60`}
+                          >
+                            <div className="flex flex-col gap-2">
+                              <div className="font-medium text-white text-sm truncate" title={d.name}>
+                                {d.name}
+                              </div>
+                              <div className="text-xs text-slate-500 truncate" title={d.id}>
+                                {d.id}
+                              </div>
+                              <div className="self-start px-2 py-0.5 rounded text-xs font-medium bg-slate-700/50 text-slate-400">
+                                Unregistered
+                              </div>
+                            </div>
                           </div>
-                          <div className={`self-start px-2 py-0.5 rounded text-xs font-medium ${
-                            isPaired 
-                              ? "bg-slate-700/50 text-slate-400" 
-                              : "bg-emerald-500/20 text-emerald-400"
-                          }`}>
-                            {isPaired ? "Paired" : "Available"}
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </>
               )}
             </div>
 
@@ -139,7 +201,9 @@ export default function DeviceSelectionStep({
                   </div>
                   Chairs
                 </h3>
-                <span className="text-xs text-slate-500 font-medium">{chairDevices.length} Available</span>
+                <span className="text-xs text-slate-500 font-medium">
+                  {chairRegistered.length} Registered · {chairUnregistered.length} Unregistered
+                </span>
               </div>
 
               {chairDevices.length === 0 ? (
@@ -148,43 +212,71 @@ export default function DeviceSelectionStep({
                   <p className="text-slate-400 text-sm">No chair devices online</p>
                 </div>
               ) : (
-                <div className="grid grid-cols-3 gap-3 max-h-64 overflow-y-auto pr-1">
-                  {chairDevices.map((d) => {
-                    const selected = selectedChairId === d.id;
-                    const isPaired = pairedChairIds.has(d.id);
-                    return (
-                      <button
-                        key={d.id}
-                        type="button"
-                        onClick={() => !isPaired && setSelectedChairId(d.id)}
-                        disabled={isPaired}
-                        className={`relative text-left border rounded-lg p-3 transition-all ${
-                          isPaired
-                            ? "border-slate-800 bg-slate-900/40 opacity-40 cursor-not-allowed"
-                            : selected
-                            ? "border-blue-500 bg-blue-500/10 ring-2 ring-blue-500/20"
-                            : "border-slate-700 bg-slate-800/40 hover:bg-slate-800 hover:border-slate-600"
-                        }`}
-                      >
-                        <div className="flex flex-col gap-2">
-                          <div className="font-medium text-white text-sm truncate" title={d.name}>
-                            {d.name}
+                <>
+                  <div className="text-xs text-slate-400 mb-2">Registered</div>
+                  <div className="grid grid-cols-3 gap-3 max-h-64 overflow-y-auto pr-1 mb-4">
+                    {chairRegistered.map((d) => {
+                      const selected = selectedChairId === d.id;
+                      const isPaired = pairedChairIds.has(d.id);
+                      return (
+                        <button
+                          key={d.id}
+                          type="button"
+                          onClick={() => !isPaired && setSelectedChairId(d.id)}
+                          disabled={isPaired}
+                          className={`relative text-left border rounded-lg p-3 transition-all ${
+                            isPaired
+                              ? "border-slate-800 bg-slate-900/40 opacity-40 cursor-not-allowed"
+                              : selected
+                              ? "border-blue-500 bg-blue-500/10 ring-2 ring-blue-500/20"
+                              : "border-slate-700 bg-slate-800/40 hover:bg-slate-800 hover:border-slate-600"
+                          }`}
+                        >
+                          <div className="flex flex-col gap-2">
+                            <div className="font-medium text-white text-sm truncate" title={d.name}>
+                              {d.name}
+                            </div>
+                            <div className="text-xs text-slate-500 truncate" title={d.id}>
+                              {d.id}
+                            </div>
+                            <div
+                              className={`self-start px-2 py-0.5 rounded text-xs font-medium ${
+                                isPaired ? "bg-slate-700/50 text-slate-400" : "bg-emerald-500/20 text-emerald-400"
+                              }`}
+                            >
+                              {isPaired ? "Paired" : "Available"}
+                            </div>
                           </div>
-                          <div className="text-xs text-slate-500 truncate" title={d.id}>
-                            {d.id}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {chairUnregistered.length > 0 && (
+                    <>
+                      <div className="text-xs text-slate-400 mb-2">Unregistered (not selectable)</div>
+                      <div className="grid grid-cols-3 gap-3 max-h-48 overflow-y-auto pr-1">
+                        {chairUnregistered.map((d) => (
+                          <div
+                            key={d.id}
+                            className={`relative text-left border rounded-lg p-3 border-slate-800 bg-slate-900/40 opacity-60`}
+                          >
+                            <div className="flex flex-col gap-2">
+                              <div className="font-medium text-white text-sm truncate" title={d.name}>
+                                {d.name}
+                              </div>
+                              <div className="text-xs text-slate-500 truncate" title={d.id}>
+                                {d.id}
+                              </div>
+                              <div className="self-start px-2 py-0.5 rounded text-xs font-medium bg-slate-700/50 text-slate-400">
+                                Unregistered
+                              </div>
+                            </div>
                           </div>
-                          <div className={`self-start px-2 py-0.5 rounded text-xs font-medium ${
-                            isPaired 
-                              ? "bg-slate-700/50 text-slate-400" 
-                              : "bg-emerald-500/20 text-emerald-400"
-                          }`}>
-                            {isPaired ? "Paired" : "Available"}
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -205,7 +297,7 @@ export default function DeviceSelectionStep({
               className="gap-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white px-8 py-2.5 rounded-lg font-semibold shadow-lg disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Plus className="w-5 h-5" />
-              Create Pair
+              Pair device
             </Button>
           </div>
 
@@ -216,11 +308,9 @@ export default function DeviceSelectionStep({
                 <h3 className="text-sm font-semibold text-white uppercase tracking-wide">
                   Active Pairs <span className="text-cyan-400">({pairs.length})</span>
                 </h3>
-                {sessionType === "group" && (
-                  <span className="text-xs text-slate-500">Add more or continue below</span>
-                )}
+                {sessionType === "group" && <span className="text-xs text-slate-500">Add more or continue below</span>}
               </div>
-              
+
               <div className="grid grid-cols-4 gap-3 mb-6">
                 {pairs.map((p, idx) => (
                   <div
@@ -233,7 +323,7 @@ export default function DeviceSelectionStep({
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
-                    
+
                     <div className="space-y-3 pr-6">
                       <div className="flex items-center gap-2">
                         <div className="p-1.5 rounded bg-purple-500/10 border border-purple-500/30">
@@ -243,7 +333,7 @@ export default function DeviceSelectionStep({
                           {p.vrId}
                         </span>
                       </div>
-                      
+
                       <div className="flex items-center gap-2">
                         <div className="p-1.5 rounded bg-blue-500/10 border border-blue-500/30">
                           <Armchair className="w-3.5 h-3.5 text-blue-400" />
