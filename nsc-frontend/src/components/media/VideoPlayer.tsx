@@ -13,6 +13,7 @@ export interface VideoPlayerProps {
   onTimeUpdateRes?: (progress: number) => void;
   onTimeUpdateMs?: (ms: number) => void;
   onDurationMs?: (ms: number) => void;
+  onSeekEnd?: (ms: number) => void;
   externalCurrentMs?: number;
   externalPlaying?: boolean;
 }
@@ -36,6 +37,7 @@ const VideoPlayerInner: React.ForwardRefRenderFunction<VideoPlayerHandle, VideoP
   onTimeUpdateRes,
   onTimeUpdateMs,
   onDurationMs,
+  onSeekEnd,
   externalCurrentMs,
   externalPlaying,
 }, ref) => {
@@ -220,6 +222,18 @@ const VideoPlayerInner: React.ForwardRefRenderFunction<VideoPlayerHandle, VideoP
                 max={100}
                 value={progress}
                 onChange={onSeek}
+                onMouseUp={() => {
+                  const el = videoRef.current;
+                  if (el && onSeekEnd) {
+                    onSeekEnd((el.currentTime || 0) * 1000);
+                  }
+                }}
+                onTouchEnd={() => {
+                  const el = videoRef.current;
+                  if (el && onSeekEnd) {
+                    onSeekEnd((el.currentTime || 0) * 1000);
+                  }
+                }}
                 className="flex-1 accent-cyan-500"
               />
               <div className="text-[11px] text-white/80 w-24 text-right">

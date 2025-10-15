@@ -19,7 +19,7 @@
     function joinSession() {
       const sid = (document.getElementById('sessionInput').value || '').trim();
       if (!sid) { alert('Enter Session ID'); return; }
-      state.sessionId = sid; setK('s_session', `Session: ${sid}`);
+      state.sessionId = sid; setK('s_session', sid);
       try { localStorage.setItem('nsc_device_session', sid); } catch { }
       // Subscribe to group command topic
       sub(`sessions/${sid}/commands/+`);
@@ -32,8 +32,7 @@
     }
 
     function leaveSession() {
-      const sid = state.sessionId; state.sessionId = '';
-      setK('s_session', 'Session: -');
+      const sid = state.sessionId; state.sessionId = ''; setK('s_session', '-');
       try { localStorage.removeItem('nsc_device_session'); } catch { }
       // No global unsubscribe to avoid removing backend subs; device will ignore further messages by not matching sessionId
       const statusPayload = { deviceId: state.id, type: state.type, status: state.playing ? 'active' : 'idle', positionMs: Math.floor(state.positionMs), sessionId: '', timestamp: new Date().toISOString() };
@@ -60,180 +59,535 @@
     }
   </script>
   <style>
+    * {
+      box-sizing: border-box;
+    }
+
     body {
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       margin: 0;
-      background: #f5f7fb;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      height: 100vh;
+      overflow: hidden;
+      padding: 12px;
     }
 
     .container {
-      max-width: 640px;
-      margin: 0 auto;
-      padding: 24px;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
     }
 
-    h1 {
-      margin: 0 0 12px;
+    .header {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border-radius: 12px;
+      padding: 12px 20px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+      flex-shrink: 0;
+    }
+
+    .header h1 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      display: inline;
+    }
+
+    .header .subtitle {
+      color: #6b7280;
+      font-size: 12px;
+      margin: 0;
+      display: inline;
+      margin-left: 12px;
+    }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: 350px 1fr 300px;
+      gap: 12px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .left-panel,
+    .center-panel,
+    .right-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 0;
     }
 
     .card {
-      background: #fff;
-      border: 1px solid #e5e7eb;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.3);
       border-radius: 12px;
       padding: 16px;
-      margin: 12px 0;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
     }
 
-    .row {
+    .card-title {
+      font-size: 14px;
+      font-weight: 600;
+      margin: 0 0 12px 0;
+      color: #1f2937;
       display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
       align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    .card-title::before {
+      content: '';
+      width: 3px;
+      height: 16px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border-radius: 2px;
+    }
+
+    .form-group {
+      margin-bottom: 10px;
     }
 
     label {
-      font-size: 12px;
+      font-size: 11px;
+      font-weight: 500;
       color: #374151;
       display: block;
       margin-bottom: 4px;
     }
 
     input,
-    select,
-    button {
-      padding: 8px 10px;
-      border: 1px solid #d1d5db;
+    select {
+      width: 100%;
+      padding: 6px 10px;
+      border: 2px solid #e5e7eb;
       border-radius: 8px;
-      font-size: 14px;
+      font-size: 13px;
+      transition: all 0.2s;
+      background: white;
     }
 
-    button {
-      background: #2563eb;
-      color: #fff;
-      border: none;
-      cursor: pointer;
+    input:focus,
+    select:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
     }
 
-    button.danger {
-      background: #dc2626;
-    }
-
-    .muted {
-      color: #6b7280;
-    }
-
-    .kvs {
+    .button-group {
       display: flex;
-      gap: 8px;
+      gap: 6px;
       flex-wrap: wrap;
     }
 
-    .pill {
-      padding: 2px 6px;
-      background: #e5e7eb;
-      border-radius: 6px;
+    button {
+      padding: 6px 12px;
+      border: none;
+      border-radius: 8px;
       font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    button:active {
+      transform: translateY(0);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none !important;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+
+    .btn-success {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      color: white;
+    }
+
+    .btn-danger {
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+      color: white;
+    }
+
+    .btn-secondary {
+      background: #f3f4f6;
+      color: #374151;
+      border: 2px solid #e5e7eb;
+    }
+
+    .btn-secondary:hover {
+      background: #e5e7eb;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      background: #f3f4f6;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 500;
+      color: #374151;
+    }
+
+    .status-badge.connected {
+      background: #d1fae5;
+      color: #065f46;
+    }
+
+    .status-badge.connected::before {
+      content: '';
+      width: 8px;
+      height: 8px;
+      background: #10b981;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+
+    .status-badge.disconnected::before {
+      content: '';
+      width: 8px;
+      height: 8px;
+      background: #6b7280;
+      border-radius: 50%;
+    }
+
+    @keyframes pulse {
+      0%, 100% {
+        opacity: 1;
+      }
+      50% {
+        opacity: 0.5;
+      }
+    }
+
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 6px;
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    .info-item {
+      background: #f9fafb;
+      padding: 8px;
+      border-radius: 8px;
+      border: 1px solid #e5e7eb;
+    }
+
+    .info-label {
+      font-size: 9px;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 2px;
+    }
+
+    .info-value {
+      font-size: 12px;
+      font-weight: 600;
+      color: #1f2937;
+      word-break: break-all;
     }
 
     .log {
-      height: 160px;
+      flex: 1;
       overflow: auto;
-      background: #0b1020;
-      color: #b2c1ff;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 12px;
+      background: #1f2937;
+      color: #e5e7eb;
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+      font-size: 10px;
       padding: 10px;
       border-radius: 8px;
+      line-height: 1.4;
+      box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    .log::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .log::-webkit-scrollbar-track {
+      background: #374151;
+      border-radius: 4px;
+    }
+
+    .log::-webkit-scrollbar-thumb {
+      background: #6b7280;
+      border-radius: 4px;
+    }
+
+    .journey-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 8px;
+      flex: 1;
+      overflow-y: auto;
+      align-content: start;
+    }
+
+    .journey-card {
+      background: white;
+      border: 2px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: center;
+    }
+
+    .journey-card:hover {
+      border-color: #667eea;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+    }
+
+    .journey-card.selected {
+      border-color: #667eea;
+      background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+    }
+
+    .journey-thumbnail {
+      width: 100%;
+      height: 70px;
+      object-fit: cover;
+      border-radius: 6px;
+      margin-bottom: 6px;
+      background: #f3f4f6;
+    }
+
+    .journey-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: #1f2937;
+      margin-bottom: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .journey-id {
+      font-size: 9px;
+      color: #6b7280;
+    }
+
+    video {
+      width: 100%;
+      height: 100%;
+      border-radius: 10px;
+      background: #000;
+      object-fit: contain;
+    }
+
+    .video-container {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: #9ca3af;
+    }
+
+    .empty-state svg {
+      width: 48px;
+      height: 48px;
+      margin-bottom: 12px;
+      opacity: 0.5;
+    }
+
+    .divider {
+      height: 1px;
+      background: #e5e7eb;
+      margin: 20px 0;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      background: #f3f4f6;
+      border-radius: 16px;
+      font-size: 11px;
+      font-weight: 500;
+      color: #374151;
+    }
+
+    .divider {
+      height: 1px;
+      background: #e5e7eb;
+      margin: 10px 0;
     }
   </style>
 </head>
 
 <body>
   <div class="container">
-    <h1>MQTT Device</h1>
-
-    <div class="card">
-      <div class="row">
-        <div style="flex:1; min-width:280px;">
-          <label>Backend URL (Socket.IO)</label>
-          <input id="mqttUrl" value="http://localhost:8001" style="width:100%" />
-        </div>
-        <div style="min-width:160px;">
-          <label>Device Type</label>
-          <select id="deviceType">
-            <option value="vr">VR</option>
-            <option value="chair">Chair</option>
-          </select>
-        </div>
-        <div style="min-width:220px;">
-          <label>Device ID</label>
-          <input id="deviceId" placeholder="DEV_XXXX" />
-        </div>
-        <div style="align-self:flex-end; display:flex; gap:8px;">
-          <button id="btnConnect" onclick="connectBroker()">Connect</button>
-          <button id="btnDisconnect" class="danger" onclick="disconnectBroker()" disabled>Disconnect</button>
-        </div>
-      </div>
-      <div id="connStatus" class="muted">Disconnected</div>
+    <!-- Header -->
+    <div class="header">
+      <h1>🎮 Device Simulator</h1>
+      <span class="subtitle">VR Headset & Motion Chair Testing Interface</span>
     </div>
 
-    <div class="card">
-      <h3>Status</h3>
-      <div class="kvs">
-        <span class="pill" id="s_type">Type: -</span>
-        <span class="pill" id="s_id">ID: -</span>
-        <span class="pill" id="s_session">Session: -</span>
-        <span class="pill" id="s_peer">Peer: -</span>
-        <span class="pill" id="s_journey">Journey: -</span>
-      </div>
-      <div class="kvs" style="margin-top:8px;">
-        <span class="pill" id="s_state">State: idle</span>
-        <span class="pill" id="s_pos">Position: 0 ms</span>
-      </div>
-      <div class="row" style="margin-top:10px; align-items:flex-end;">
-        <div style="min-width:220px;">
-          <label>Session ID (Group)</label>
-          <input id="sessionInput" placeholder="S_XXXX" />
+    <!-- Main 3-Column Grid -->
+    <div class="main-grid">
+      <!-- LEFT PANEL -->
+      <div class="left-panel">
+        <!-- Connection -->
+        <div class="card" style="flex-shrink: 0;">
+          <h2 class="card-title">Connection</h2>
+          <div class="form-group">
+            <label>Backend URL</label>
+            <input id="mqttUrl" value="http://localhost:8001" />
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px;">
+            <div class="form-group" style="margin: 0;">
+              <label>Type</label>
+              <select id="deviceType">
+                <option value="vr">🥽 VR</option>
+                <option value="chair">💺 Chair</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin: 0;">
+              <label>Device ID</label>
+              <input id="deviceId" placeholder="VR_#001" />
+            </div>
+          </div>
+          <div class="button-group">
+            <button id="btnConnect" class="btn-success" onclick="connectBroker()">⚡ Connect</button>
+            <button id="btnDisconnect" class="btn-danger" onclick="disconnectBroker()" disabled>⏹ Disconnect</button>
+          </div>
+          <div style="margin-top: 8px;">
+            <div id="connStatus" class="status-badge disconnected">Disconnected</div>
+          </div>
         </div>
-        <div style="display:flex; gap:8px;">
-          <button onclick="joinSession()">Join Session</button>
-          <button class="danger" onclick="leaveSession()">Leave Session</button>
-        </div>
-        <div style="display:flex; gap:8px;">
-          <button class="secondary" onclick="sendEvent('play')">Play (send)</button>
-          <button class="secondary" onclick="sendEvent('pause')">Pause (send)</button>
-          <button class="secondary" onclick="sendEvent('stop')">Stop (send)</button>
-          <button class="secondary" onclick="sendEvent('reset')">Reset (send)</button>
-        </div>
-      </div>
-    </div>
 
-    <div class="card">
-      <h3>Logs</h3>
-      <div id="log" class="log"></div>
-    </div>
-
-    <div class="card">
-      <h3>Journeys (from Session)</h3>
-      <div id="journeysList" class="muted">No session loaded.</div>
-    </div>
-
-    <div class="card">
-      <h3>Video (Test Playback)</h3>
-      <div class="row" style="align-items:flex-end;">
-        <div style="flex:1; min-width:300px;">
-          <label>Video URL</label>
-          <input id="videoUrl" placeholder="http://localhost:8001/video/<file>" style="width:100%" />
+        <!-- Device Info -->
+        <div class="card" style="flex: 1; min-height: 0;">
+          <h2 class="card-title">Device Info</h2>
+          <div class="info-grid">
+            <div class="info-item">
+              <div class="info-label">Type</div>
+              <div class="info-value" id="s_type">-</div>
+            </div>
+            <div class="info-item">
+              <div class="info-label">Device ID</div>
+              <div class="info-value" id="s_id">-</div>
+            </div>
+            <div class="info-item">
+              <div class="info-label">Session</div>
+              <div class="info-value" id="s_session">-</div>
+            </div>
+            <div class="info-item">
+              <div class="info-label">Peer</div>
+              <div class="info-value" id="s_peer">-</div>
+            </div>
+            <div class="info-item">
+              <div class="info-label">Journey</div>
+              <div class="info-value" id="s_journey">-</div>
+            </div>
+            <div class="info-item">
+              <div class="info-label">State</div>
+              <div class="info-value" id="s_state">idle</div>
+            </div>
+            <div class="info-item">
+              <div class="info-label">Position</div>
+              <div class="info-value" id="s_pos">0:00</div>
+            </div>
+          </div>
         </div>
-        <div style="display:flex; gap:8px;">
-          <button onclick="loadVideoUrl()">Load URL</button>
-          <button onclick="clearVideoUrl()" class="danger">Clear</button>
+
+        <!-- Session Management -->
+        <div class="card" style="flex-shrink: 0;">
+          <h2 class="card-title">Session</h2>
+          <div class="form-group">
+            <label>Session ID</label>
+            <input id="sessionInput" placeholder="S_XXXX" />
+          </div>
+          <div class="button-group" style="margin-bottom: 8px;">
+            <button class="btn-success" onclick="joinSession()">✓ Join</button>
+            <button class="btn-danger" onclick="leaveSession()">✗ Leave</button>
+          </div>
+          <div class="divider"></div>
+          <div class="button-group">
+            <button class="btn-secondary" onclick="sendEvent('play')">▶</button>
+            <button class="btn-secondary" onclick="sendEvent('pause')">⏸</button>
+            <button class="btn-secondary" onclick="sendEvent('stop')">⏹</button>
+            <button class="btn-secondary" onclick="sendEvent('reset')">↻</button>
+          </div>
         </div>
       </div>
-      <div style="margin-top:10px;">
-        <video id="player" style="width:100%; max-height:300px; background:#000;" playsinline muted controls></video>
+
+      <!-- CENTER PANEL -->
+      <div class="center-panel">
+        <!-- Video Player -->
+        <div class="card" style="flex: 2; min-height: 0;">
+          <h2 class="card-title">Video Player</h2>
+          <!-- <div class="form-group">
+            <label>Video URL</label>
+            <input id="videoUrl" placeholder="http://localhost:8001/video/filename.mp4" />
+          </div>
+          <div class="button-group" style="margin-bottom: 10px;">
+            <button class="btn-primary" onclick="loadVideoUrl()">📹 Load</button>
+            <button class="btn-danger" onclick="clearVideoUrl()">🗑 Clear</button>
+          </div> -->
+          <div class="video-container">
+            <video id="player" playsinline muted controls></video>
+          </div>
+        </div>
+
+        <!-- Logs -->
+        <div class="card" style="flex: 1; min-height: 0;">
+          <h2 class="card-title">System Logs</h2>
+          <div id="log" class="log"></div>
+        </div>
       </div>
-      <div class="muted" style="margin-top:6px; font-size:12px;">Note: This is a local test player. Devices should load their own media for a journey. Use this to verify command timing.</div>
+
+      <!-- RIGHT PANEL -->
+      <div class="right-panel">
+        <!-- Journeys -->
+        <div class="card" style="flex: 1; min-height: 0;">
+          <h2 class="card-title">Journeys</h2>
+          <div id="journeysList" class="empty-state" style="flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column;">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width: 32px; height: 32px; margin-bottom: 8px; opacity: 0.5;">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" />
+            </svg>
+            <div style="font-size: 11px;">No session loaded</div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -254,8 +608,13 @@
     function rand(n = 6) { return Math.random().toString(36).slice(2, 2 + n).toUpperCase(); }
     function appendRand(el) { if (!el._touched) { el.value += rand(); el._touched = true; } }
     function log(msg) { const el = document.getElementById('log'); const ts = new Date().toLocaleTimeString(); el.textContent += `[${ts}] ${msg}\n`; el.scrollTop = el.scrollHeight; console.log(msg); }
-    function setK(id, v) { document.getElementById(id).textContent = v; }
-    function setConnStatus(t) { document.getElementById('connStatus').textContent = t; }
+    function setK(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
+    function setConnStatus(t, isConnected) {
+      const el = document.getElementById('connStatus');
+      if (!el) return;
+      el.textContent = t;
+      el.className = isConnected ? 'status-badge connected' : 'status-badge disconnected';
+    }
     function loadVideoUrl() {
       const url = (document.getElementById('videoUrl').value || '').trim();
       if (!player) player = document.getElementById('player');
@@ -283,7 +642,8 @@
       state.type = document.getElementById('deviceType').value || 'vr';
       state.id = document.getElementById('deviceId').value.trim() || ('DEV_' + rand(8));
       state.name = '';
-      setK('s_type', `Type: ${state.type}`); setK('s_id', `ID: ${state.id}`);
+      setK('s_type', state.type === 'vr' ? '🥽 VR' : '💺 Chair');
+      setK('s_id', state.id);
       player = document.getElementById('player');
       if (player) {
         player.addEventListener('timeupdate', () => {
@@ -291,20 +651,24 @@
           // Trust the video clock when playing
           if (!Number.isNaN(t)) {
             state.positionMs = t;
-            setK('s_pos', `Position: ${Math.max(0, Math.floor(state.positionMs))} ms`);
+            const pos = Math.max(0, Math.floor(state.positionMs));
+            const sec = Math.floor(pos / 1000);
+            const min = Math.floor(sec / 60);
+            const s = sec % 60;
+            setK('s_pos', `${min}:${s.toString().padStart(2, '0')}`);
           }
         });
         player.addEventListener('play', () => {
-          state.playing = true; setK('s_state', 'State: playing');
+          state.playing = true; setK('s_state', '▶ Playing');
           // Notify admin/backend of local action
           sendEvent('play');
         });
         player.addEventListener('pause', () => {
-          state.playing = false; setK('s_state', 'State: paused');
+          state.playing = false; setK('s_state', '⏸ Paused');
           sendEvent('pause');
         });
         player.addEventListener('ended', () => {
-          state.playing = false; setK('s_state', 'State: stopped');
+          state.playing = false; setK('s_state', '⏹ Stopped');
           sendEvent('stop');
         });
       }
@@ -319,7 +683,7 @@
       loadSocketIo().then(() => {
         bridge = io(url, { transports: ['websocket'] });
         bridge.on('connect', () => {
-          connected = true; setConnStatus('Connected (bridge)'); log('Bridge connected to ' + url); toggleButtons();
+          connected = true; setConnStatus('Connected', true); log('Bridge connected to ' + url); toggleButtons();
           // Identify to backend for immediate offline on disconnect
           bridge.emit('device:identify', { deviceId: state.id, type: state.type, name: state.name });
           // Subscribe to device command topics
@@ -339,7 +703,7 @@
           pub(T_heartbeat(state.id), JSON.stringify({ timestamp: new Date().toISOString(), status: 'active' }), false);
           startTicker();
         });
-        bridge.on('disconnect', () => { connected = false; setConnStatus('Disconnected'); toggleButtons(); stopTicker(); });
+        bridge.on('disconnect', () => { connected = false; setConnStatus('Disconnected', false); toggleButtons(); stopTicker(); });
         bridge.on('mqtt_message', ({ topic, payload }) => {
           const msg = { destinationName: topic, payloadString: (typeof payload === 'string' ? payload : JSON.stringify(payload || {})) };
           onMsg(msg);
@@ -404,7 +768,7 @@
         const stype = String(first.session_type || first?.data?.session_type || '').toLowerCase();
         state.sessionType = stype;
         if (sid && !state.sessionId) {
-          state.sessionId = sid; setK('s_session', `Session: ${sid}`);
+          state.sessionId = sid; setK('s_session', sid);
           try { localStorage.setItem('nsc_device_session', sid); } catch {}
           sub(`sessions/${sid}/commands/+`);
         }
@@ -441,41 +805,42 @@
     function renderJourneys() {
       const el = document.getElementById('journeysList');
       const arr = state.journeys || [];
-      // Update heading based on session type
-      try {
-        const header = el && el.parentElement ? el.parentElement.querySelector('h3') : null;
-        if (header) {
-          header.textContent = (state.sessionType === 'individual') ? 'Journeys (All Available)' : 'Journeys (from Session)';
-        }
-      } catch {}
-      if (!arr.length) { el.textContent = 'No journeys in session.'; return; }
-      el.innerHTML = '';
-      arr.forEach((j) => {
-        const jid = j?.journey?.id != null ? String(j.journey.id) : '';
-        const title = j?.video?.title || j?.journey?.title || `Journey ${jid}`;
-        const dur = j?.video?.duration_ms != null ? `${j.video.duration_ms} ms` : '-';
-        const vurl = j?.video?.url || j?.video?.video_url || '';
-        const row = document.createElement('div');
-        row.className = 'row';
-        row.innerHTML = `
-          <div style="flex:1; min-width:200px;">
-            <div><strong>${title}</strong></div>
-            <div class="muted">ID: ${jid} · Duration: ${dur}</div>
-            <div class="muted" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:520px;">${vurl || ''}</div>
-          </div>
-          <div style="display:flex; gap:8px;">
-            <button data-jid="${jid}">Select</button>
+      if (!arr.length) {
+        el.innerHTML = `
+          <div style="flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; color: #9ca3af;">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width: 32px; height: 32px; margin-bottom: 8px; opacity: 0.5;">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" />
+            </svg>
+            <div style="font-size: 11px;">No journeys available</div>
           </div>
         `;
-        const btn = row.querySelector('button');
-        if (btn) btn.addEventListener('click', () => selectAndLoadJourney(jid));
-        el.appendChild(row);
+        return;
+      }
+      // Render as grid of cards
+      let html = '<div class="journey-grid">';
+      arr.forEach((j) => {
+        const jid = String(j?.journey?.id || j?.video?.id || '');
+        const title = String(j?.journey?.title || j?.video?.title || 'Untitled');
+        const thumbnail = j?.video?.thumbnail_url || '';
+        const selected = (String(state.journeyId) === jid);
+        const selectedClass = selected ? 'selected' : '';
+        html += `<div class="journey-card ${selectedClass}" onclick="selectAndLoadJourney('${jid}')">`;
+        if (thumbnail) {
+          html += `<img src="${thumbnail}" class="journey-thumbnail" alt="${title}" />`;
+        } else {
+          html += `<div class="journey-thumbnail" style="display:flex;align-items:center;justify-content:center;color:#9ca3af;">📹</div>`;
+        }
+        html += `<div class="journey-title">${title}</div>`;
+        html += `<div class="journey-id">ID: ${jid}</div>`;
+        html += `</div>`;
       });
+      html += '</div>';
+      el.innerHTML = html;
     }
 
     function selectAndLoadJourney(jid) {
       state.journeyId = String(jid || '');
-      setK('s_journey', `Journey: ${state.journeyId || '-'}`);
+      setK('s_journey', state.journeyId || '-');
       const arr = state.journeys || [];
       const found = arr.find((j) => String(j?.journey?.id || '') === String(state.journeyId));
       const vurl = found?.video?.url || found?.video?.video_url || '';
@@ -502,20 +867,20 @@
           try { if (typeof data.positionMs === 'number') player.currentTime = Math.max(0, data.positionMs / 1000); } catch {}
           player.play().catch(() => {});
         }
-        state.playing = true; setK('s_state', 'State: playing');
+        state.playing = true; setK('s_state', '▶ Playing');
       } else if (cmd === 'pause') {
         if (typeof data.positionMs === 'number') state.positionMs = data.positionMs;
         if (player && player.src) {
           try { if (typeof data.positionMs === 'number') player.currentTime = Math.max(0, data.positionMs / 1000); } catch {}
           try { player.pause(); } catch {}
         }
-        state.playing = false; setK('s_state', 'State: paused');
+        state.playing = false; setK('s_state', '⏸ Paused');
       } else if (cmd === 'seek') {
         if (typeof data.positionMs === 'number') state.positionMs = data.positionMs;
         if (player && player.src) {
           try { player.currentTime = Math.max(0, (state.positionMs || 0) / 1000); } catch {}
         }
-        setK('s_state', 'State: seeking');
+        setK('s_state', '⏩ Seeking');
       } else if (cmd === 'stop' || cmd === 'reset') {
         state.playing = false; state.positionMs = 0;
         if (player && player.src) {
@@ -523,7 +888,7 @@
         }
         setK('s_state', 'State: stopped');
       } else if (cmd === 'calibrate') {
-        setK('s_state', 'State: calibrating');
+        setK('s_state', '🔧 Calibrating');
       } else if (cmd === 'join_session') {
         const sid = String(data.sessionId || data.session_id || '').trim();
         if (sid) { document.getElementById('sessionInput').value = sid; joinSession(); }

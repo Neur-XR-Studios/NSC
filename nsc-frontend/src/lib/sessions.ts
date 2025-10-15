@@ -97,7 +97,9 @@ export type ParticipantRecord = {
   vr_device_id: string;
   chair_device_id: string;
   language?: string | null;
-  joined_at?: string;
+  journey_id?: number | null;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export async function addParticipant(
@@ -133,6 +135,7 @@ export interface SessionDetailsParticipant {
   id: string;
   vr_device_id?: string | null;
   chair_device_id?: string | null;
+  journey_id?: number | null;
 }
 export interface SessionDetailsEnvelope {
   status?: boolean;

@@ -65,6 +65,22 @@ class SessionService {
       session_type: type,
     });
 
+    // For individual sessions, also register the initial pair as a participant
+    if (type === 'individual' && vr && chair) {
+      try {
+        await SessionParticipant.create({
+          id: uuidv4(),
+          session_id: session.id,
+          vr_device_id: vr.id,
+          chair_device_id: chair.id,
+          language: null,
+          joined_at: new Date(),
+        });
+      } catch (e) {
+        // Non-fatal: participant creation failure should not block session creation
+      }
+    }
+
     // Broadcast join_session to devices so they attach to the session topics immediately
     try {
       const ts = new Date().toISOString();
@@ -769,6 +785,8 @@ class SessionService {
     // Mirror to both device topics for compatibility
     const vrHw = participant.vr?.deviceId || null;
     const chairHw = participant.chair?.deviceId || null;
+    const logger = require('../config/logger');
+    logger.info(`[commandParticipant] ${cmd} for participant ${participantId} (VR: ${vrHw}, Chair: ${chairHw}) ${cmd === 'select_journey' ? `journey: ${journeyId}` : ''}`);
     try {
       if (vrHw) {
         mqttService.publish(`devices/${vrHw}/commands/${cmd}`, { ...payload, sessionId }, { qos: 1, retain: false });

@@ -19,6 +19,10 @@ const rootSocket = (io) => {
             };
             mqttService.subscribe('sessions/+/commands/+', forward, { qos: 1 });
             mqttService.subscribe('devices/+/commands/+', forward, { qos: 1 });
+            mqttService.subscribe('devices/+/status', forward, { qos: 1 });
+            mqttService.subscribe('devices/+/heartbeat', forward, { qos: 1 });
+            mqttService.subscribe('devices/+/events', forward, { qos: 1 });
+            mqttService.subscribe('devices/discovery/announce', forward, { qos: 1 });
             subscriptionsInitialized = true;
         } catch (e) {
             console.error('Error initializing MQTT forward subscriptions', e);
@@ -46,6 +50,8 @@ const rootSocket = (io) => {
                 if (!deviceId) return;
                 const payload = Buffer.from(JSON.stringify(data));
                 deviceDiscoveryService.handleHeartbeat(`devices/${deviceId}/heartbeat`, payload);
+                // Also broadcast to admin panel
+                io.emit('mqtt_message', { topic: `devices/${deviceId}/heartbeat`, payload: data });
             } catch (e) {
                 console.error('Error handling device:heartbeat', e);
             }
@@ -58,6 +64,8 @@ const rootSocket = (io) => {
                 if (!deviceId) return;
                 const payload = Buffer.from(JSON.stringify(data));
                 deviceDiscoveryService.handleStatusUpdate(`devices/${deviceId}/status`, payload);
+                // Also broadcast to admin panel
+                io.emit('mqtt_message', { topic: `devices/${deviceId}/status`, payload: data });
             } catch (e) {
                 console.error('Error handling device:status', e);
             }
@@ -80,6 +88,11 @@ const rootSocket = (io) => {
                                 deviceDiscoveryService.handleHeartbeat(topic, buf);
                             } else if (/^devices\/[^/]+\/status$/.test(topic)) {
                                 deviceDiscoveryService.handleStatusUpdate(topic, buf);
+                            } else if (/^devices\/[^/]+\/events$/.test(topic)) {
+                                // Mirror events to admin panel
+                                let parsed;
+                                try { parsed = JSON.parse(payload); } catch { parsed = payload; }
+                                io.emit('mqtt_message', { topic, payload: parsed });
                             } else if (/^sessions\/[^/]+\/commands\//.test(topic) || /^devices\/[^/]+\/commands\//.test(topic)) {
                                 // Mirror command topics to Socket.IO mqtt_message so bridge subscribers get it immediately
                                 let parsed;

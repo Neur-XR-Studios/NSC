@@ -20,6 +20,9 @@ type Device = {
   status?: string;
   positionMs?: number;
   sessionId?: string;
+  currentJourneyId?: number;
+  lastEvent?: string;
+  lastEventTimestamp?: string;
 };
 
 type Pair = {
@@ -233,8 +236,10 @@ export default function DeviceControlPanel() {
     (msg: { destinationName: string; payloadString?: string }) => {
       const t = msg.destinationName;
       const p = msg.payloadString || "";
+      console.log("Message received: ", t, p);
       try {
         if (t === "devices/discovery/announce") {
+          console.log("Announcement received for device: ", t.split("/")[1]);
           const d = JSON.parse(p || "{}");
           const id = d.deviceId;
           if (!id) return;
@@ -252,6 +257,7 @@ export default function DeviceControlPanel() {
             return map;
           });
         } else if (t.startsWith("devices/") && t.endsWith("/status")) {
+          console.log("Status received for device: ", t.split("/")[1]);
           const id = t.split("/")[1];
           const data = JSON.parse(p || "{}");
           renderDevices((map) => {
@@ -275,9 +281,34 @@ export default function DeviceControlPanel() {
             return map;
           });
         } else if (t.startsWith("devices/") && t.endsWith("/heartbeat")) {
+          console.log("Heartbeat received for device: ", t.split("/")[1]);
           const id = t.split("/")[1];
           renderDevices((map) => {
             const cur: Device = map.get(id) || { id, type: "unknown", name: id, online: false };
+            cur.lastSeen = Date.now();
+            map.set(id, cur);
+            return map;
+          });
+        } else if (t.startsWith("devices/") && t.endsWith("/events")) {
+          console.log(p, t);
+          const id = t.split("/")[1];
+          const data = JSON.parse(p || "{}");
+          const event = String(data?.event || "");
+          log(`[Device Event] ${id}: ${event} (journey: ${data?.journeyId || "?"}, pos: ${data?.positionMs || 0}ms)`);
+          renderDevices((map) => {
+            const cur: Device = map.get(id) || { id, type: "unknown", name: id, online: false };
+            if (event === "select_journey" && data?.journeyId != null) {
+              cur.currentJourneyId = Number(data.journeyId);
+            }
+            if (event === "play") {
+              cur.status = "active";
+            } else if (event === "pause" || event === "stop") {
+              cur.status = "idle";
+            }
+            if (typeof data?.positionMs === "number") cur.positionMs = Number(data.positionMs);
+            if (typeof data?.sessionId === "string") cur.sessionId = String(data.sessionId);
+            cur.lastEvent = event;
+            cur.lastEventTimestamp = String(data?.timestamp || "");
             cur.lastSeen = Date.now();
             map.set(id, cur);
             return map;
@@ -306,6 +337,7 @@ export default function DeviceControlPanel() {
       subscribeTopic("devices/discovery/announce");
       subscribeTopic("devices/+/status");
       subscribeTopic("devices/+/heartbeat");
+      subscribeTopic("devices/+/events");
 
       const offs: Array<() => void> = [offConn, offDisc];
       if (realtime.currentMode === "bridge") {
@@ -525,7 +557,7 @@ export default function DeviceControlPanel() {
   const handleCreateGroup = useCallback(async () => {
     try {
       if (pairs.length === 0 || !selectedJourneyIds) return;
-      console.log(selectedJourneyIds);
+      
       const payloadMembers = pairs.map((p) => ({ vrDeviceId: p.vrId, chairDeviceId: p.chairId, language: "en" }));
       const res = await createGroupSession({
         session_type: "group",
@@ -565,9 +597,9 @@ export default function DeviceControlPanel() {
   }, [devicesList]);
 
   const deviceInfoById = useMemo(() => {
-    const map: Record<string, { status?: string; positionMs?: number; sessionId?: string }> = {};
+    const map: Record<string, { status?: string; positionMs?: number; sessionId?: string; currentJourneyId?: number; lastEvent?: string }> = {};
     for (const d of devicesList) {
-      map[d.id] = { status: d.status, positionMs: d.positionMs, sessionId: d.sessionId };
+      map[d.id] = { status: d.status, positionMs: d.positionMs, sessionId: d.sessionId, currentJourneyId: d.currentJourneyId, lastEvent: d.lastEvent };
     }
     return map;
   }, [devicesList]);
@@ -655,6 +687,8 @@ export default function DeviceControlPanel() {
               setPairs={(updater) => setPairs((prev) => updater(prev))}
               onlineById={onlineById}
               deviceInfoById={deviceInfoById}
+              vrDevices={vrDevices}
+              chairDevices={chairDevices}
               sessionType={sessionType}
             />
           )}
