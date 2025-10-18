@@ -81,23 +81,6 @@ class SessionService {
       }
     }
 
-    // Broadcast join_session to devices so they attach to the session topics immediately
-    try {
-      const ts = new Date().toISOString();
-      const payload = { sessionId: session.id, sessionType: session.session_type || 'individual', journeyId: journeys, timestamp: ts };
-      if (vr?.deviceId) {
-        mqttService.publish(`devices/${vr.deviceId}/commands/join_session`, payload, { qos: 1, retain: false });
-      }
-      if (chair?.deviceId) {
-        mqttService.publish(`devices/${chair.deviceId}/commands/join_session`, payload, { qos: 1, retain: false });
-      }
-      // Also mirror to Socket.IO bridge to reach web-bridged devices immediately
-      try { global.io?.emit('mqtt_message', { topic: `devices/${vr?.deviceId || ''}/commands/join_session`, payload }); } catch { /* noop */ }
-      try { global.io?.emit('mqtt_message', { topic: `devices/${chair?.deviceId || ''}/commands/join_session`, payload }); } catch { /* noop */ }
-    } catch (e) {
-      // Non-fatal
-    }
-
     return { statusCode: httpStatus.OK, response: { status: true, data: session } };
   }
 
@@ -185,8 +168,18 @@ class SessionService {
     // Broadcast join_session to all VR/Chair devices in the group
     try {
       const ts = new Date().toISOString();
-      const payload = { sessionId: session.id, sessionType: 'group', journeyId: journeys, timestamp: ts };
+      const firstJourneyId = journeys && journeys.length > 0 ? journeys[0] : null;
+      
       for (const tgt of joinTargets) {
+        // Include participant ID for this specific device pair
+        const payload = { 
+          cmd: 'join_session',
+          sessionId: session.id, 
+          sessionType: 'group', 
+          participantId: tgt.participantId,
+          journeyId: firstJourneyId,
+          timestamp: ts 
+        };
         if (tgt.vrHw) mqttService.publish(`devices/${tgt.vrHw}/commands/join_session`, payload, { qos: 1, retain: false });
         if (tgt.chairHw) mqttService.publish(`devices/${tgt.chairHw}/commands/join_session`, payload, { qos: 1, retain: false });
         try { if (tgt.vrHw) global.io?.emit('mqtt_message', { topic: `devices/${tgt.vrHw}/commands/join_session`, payload }); } catch { /* noop */ }
@@ -716,7 +709,18 @@ class SessionService {
     // Broadcast join_session to devices
     try {
       const ts = new Date().toISOString();
-      const payload = { sessionId: session.id, sessionType: session.session_type || 'individual', participantId: participant.id, journeyId: session.journey_ids || [], timestamp: ts };
+      // For individual: no journey initially (operator selects later), send null
+      // For group: send first journey ID if available
+      const journeyIds = session.journey_ids || [];
+      const firstJourneyId = Array.isArray(journeyIds) && journeyIds.length > 0 ? journeyIds[0] : null;
+      const payload = { 
+        cmd: 'join_session',
+        sessionId: session.id, 
+        sessionType: session.session_type || 'individual', 
+        participantId: participant.id, 
+        journeyId: session.session_type === 'individual' ? null : firstJourneyId,
+        timestamp: ts 
+      };
       if (vr?.deviceId) mqttService.publish(`devices/${vr.deviceId}/commands/join_session`, payload, { qos: 1, retain: false });
       if (chair?.deviceId) mqttService.publish(`devices/${chair.deviceId}/commands/join_session`, payload, { qos: 1, retain: false });
       try { if (vr?.deviceId) global.io?.emit('mqtt_message', { topic: `devices/${vr.deviceId}/commands/join_session`, payload }); } catch { /* noop */ }
