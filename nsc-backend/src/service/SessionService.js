@@ -84,7 +84,7 @@ class SessionService {
     // Broadcast join_session to devices so they attach to the session topics immediately
     try {
       const ts = new Date().toISOString();
-      const payload = { sessionId: session.id, journeyId: journeys, timestamp: ts };
+      const payload = { sessionId: session.id, sessionType: session.session_type || 'individual', journeyId: journeys, timestamp: ts };
       if (vr?.deviceId) {
         mqttService.publish(`devices/${vr.deviceId}/commands/join_session`, payload, { qos: 1, retain: false });
       }
@@ -185,7 +185,7 @@ class SessionService {
     // Broadcast join_session to all VR/Chair devices in the group
     try {
       const ts = new Date().toISOString();
-      const payload = { sessionId: session.id, journeyId: journeys, timestamp: ts };
+      const payload = { sessionId: session.id, sessionType: 'group', journeyId: journeys, timestamp: ts };
       for (const tgt of joinTargets) {
         if (tgt.vrHw) mqttService.publish(`devices/${tgt.vrHw}/commands/join_session`, payload, { qos: 1, retain: false });
         if (tgt.chairHw) mqttService.publish(`devices/${tgt.chairHw}/commands/join_session`, payload, { qos: 1, retain: false });
@@ -604,19 +604,19 @@ class SessionService {
     let payload;
     switch (cmd) {
       case 'start':
-        payload = { cmd: 'start', startAtMs: applyAtMs, durationMs };
+        payload = { cmd: 'start', startAtMs: applyAtMs, durationMs, journeyId };
         break;
       case 'pause':
-        payload = { cmd: 'pause', positionMs };
+        payload = { cmd: 'pause', positionMs, journeyId };
         break;
       case 'stop':
-        payload = { cmd: 'stop' };
+        payload = { cmd: 'stop', journeyId };
         break;
       case 'seek':
-        payload = { cmd: 'seek', positionMs, applyAtMs };
+        payload = { cmd: 'seek', positionMs, applyAtMs, journeyId };
         break;
       case 'sync':
-        payload = { cmd: 'sync', serverTimeMs: Date.now() };
+        payload = { cmd: 'sync', serverTimeMs: Date.now(), journeyId };
         break;
       case 'select_journey':
         payload = { cmd: 'select_journey', journeyId, applyAtMs };
@@ -716,7 +716,7 @@ class SessionService {
     // Broadcast join_session to devices
     try {
       const ts = new Date().toISOString();
-      const payload = { sessionId: session.id, journeyId: session.journey_ids || [], timestamp: ts };
+      const payload = { sessionId: session.id, sessionType: session.session_type || 'individual', participantId: participant.id, journeyId: session.journey_ids || [], timestamp: ts };
       if (vr?.deviceId) mqttService.publish(`devices/${vr.deviceId}/commands/join_session`, payload, { qos: 1, retain: false });
       if (chair?.deviceId) mqttService.publish(`devices/${chair.deviceId}/commands/join_session`, payload, { qos: 1, retain: false });
       try { if (vr?.deviceId) global.io?.emit('mqtt_message', { topic: `devices/${vr.deviceId}/commands/join_session`, payload }); } catch { /* noop */ }
@@ -746,7 +746,7 @@ class SessionService {
   }
 
   // Participant-scoped command
-  async commandParticipant({ sessionId, participantId, cmd, positionMs, durationMs, journeyId }) {
+  async commandParticipant({ sessionId, participantId, cmd, positionMs, durationMs, journeyId, language }) {
     const participant = await SessionParticipant.findByPk(participantId, { include: [{ model: VRDevice, as: 'vr' }, { model: ChairDevice, as: 'chair' }] });
     if (!participant || participant.session_id !== sessionId) {
       return { statusCode: httpStatus.NOT_FOUND, response: { status: false, message: 'Participant not found' } };
@@ -758,22 +758,22 @@ class SessionService {
     let payload;
     switch (cmd) {
       case 'start':
-        payload = { cmd: 'start', startAtMs: applyAtMs, durationMs };
+        payload = { cmd: 'start', startAtMs: applyAtMs, durationMs, journeyId };
         break;
       case 'pause':
-        payload = { cmd: 'pause', positionMs };
+        payload = { cmd: 'pause', positionMs, journeyId };
         break;
       case 'stop':
-        payload = { cmd: 'stop' };
+        payload = { cmd: 'stop', journeyId };
         break;
       case 'seek':
-        payload = { cmd: 'seek', positionMs, applyAtMs };
+        payload = { cmd: 'seek', positionMs, applyAtMs, journeyId };
         break;
       case 'sync':
-        payload = { cmd: 'sync', serverTimeMs: Date.now() };
+        payload = { cmd: 'sync', serverTimeMs: Date.now(), journeyId };
         break;
       case 'select_journey':
-        payload = { cmd: 'select_journey', journeyId, applyAtMs };
+        payload = { cmd: 'select_journey', journeyId, language: language || '', applyAtMs };
         break;
       default:
         return { statusCode: httpStatus.BAD_REQUEST, response: { status: false, message: 'Invalid cmd' } };

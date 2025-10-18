@@ -468,7 +468,7 @@ export default function DeviceControlPanel() {
   
 
   const sendCmd = useCallback(
-    (sessionId: string, type: "play" | "pause" | "seek" | "stop", positionMs?: number) => {
+    (sessionId: string, type: "play" | "pause" | "seek" | "stop", positionMs?: number, journeyId?: number) => {
       const p = pairs.find((x) => x.sessionId === sessionId);
       if (!p) {
         alert("Session not found");
@@ -476,12 +476,12 @@ export default function DeviceControlPanel() {
       }
       if (sessionId) {
         const cmd = type === "play" ? "start" : (type as "pause" | "seek" | "stop");
-        void commandSession(sessionId, cmd, { positionMs: Number(positionMs || 0) });
+        void commandSession(sessionId, cmd, { positionMs: Number(positionMs || 0), journeyId });
         return;
       }
       const payload = {
         positionMs: Number(positionMs || 0),
-        journeyId: p.journeyId || null,
+        journeyId: journeyId || p.journeyId || null,
         timestamp: new Date().toISOString(),
       };
       publishTopic(`devices/${p.vrId}/commands/${type}`, JSON.stringify(payload), false);

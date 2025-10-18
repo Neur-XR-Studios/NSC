@@ -28,7 +28,7 @@ function setAuthHeader(config: AxiosRequestConfig, token: string) {
 
 const instance = axios.create({
   baseURL: import.meta.env.VITE_API_URL || "http://localhost:8001/api",
-  timeout: 5000,
+  timeout: 300000, // 5 minutes - allow time for large file uploads
   headers: {
     Accept: "application/json",
     "Content-Type": "application/json",
@@ -43,6 +43,17 @@ type QueueItem = {
 
 let failedQueue: QueueItem[] = [];
 
+function processQueue(error: unknown, token: string | null = null) {
+  failedQueue.forEach((prom) => {
+    if (error) {
+      prom.reject(error);
+    } else if (token) {
+      prom.resolve(token);
+    }
+  });
+  failedQueue = [];
+}
+
 instance.interceptors.request.use(
   async (config) => {
     // Always ensure headers object exists
@@ -52,61 +63,61 @@ instance.interceptors.request.use(
       sessionStorage.getItem("token") ||
       useAuthStore.getState().accessToken ||
       "";
-    // const refreshToken = sessionStorage.getItem("refreshToken") || "";
+    const refreshToken = sessionStorage.getItem("refreshToken") || "";
 
     // If token is expired and we have a refresh token, try to get a new access token
-    // if (token && refreshToken && isTokenExpired(token)) {
-    //   if (!isRefreshing) {
-    //     isRefreshing = true;
-    //     try {
-    //       const res = await axios.post(
-    //         `${
-    //           import.meta.env.VITE_API_URL || "http://localhost:8001/api"
-    //         }/auth/refresh-tokens`,
-    //         { refreshToken },
-    //         { withCredentials: true }
-    //       );
+    if (token && refreshToken && isTokenExpired(token)) {
+      if (!isRefreshing) {
+        isRefreshing = true;
+        try {
+          const res = await axios.post(
+            `${
+              import.meta.env.VITE_API_URL || "http://localhost:8001/api"
+            }/auth/refresh-tokens`,
+            { refreshToken },
+            { withCredentials: true }
+          );
 
-    //       const newAccessToken: string = res.data?.access?.token;
-    //       const newRefreshToken: string = res.data?.refresh?.token;
+          const newAccessToken: string = res.data?.access?.token;
+          const newRefreshToken: string = res.data?.refresh?.token;
 
-    //       if (!newAccessToken || !newRefreshToken)
-    //         throw new Error("Invalid refresh response");
+          if (!newAccessToken || !newRefreshToken)
+            throw new Error("Invalid refresh response");
 
-    //       // Persist
-    //       sessionStorage.setItem("token", newAccessToken);
-    //       sessionStorage.setItem("refreshToken", newRefreshToken);
+          // Persist
+          sessionStorage.setItem("token", newAccessToken);
+          sessionStorage.setItem("refreshToken", newRefreshToken);
 
-    //       // Update current request header and flush queue
-    //       setAuthHeader(config, newAccessToken);
-    //       processQueue(null, newAccessToken);
+          // Update current request header and flush queue
+          setAuthHeader(config, newAccessToken);
+          processQueue(null, newAccessToken);
 
-    //       return config;
-    //     } catch (err) {
-    //       // On refresh failure, logout and reject queued
-    //       try {
-    //         useAuthStore.getState().logout();
-    //       } catch (e) {
-    //         console.warn("Logout failed after token refresh error", e);
-    //       }
-    //       processQueue(err, null);
-    //       return Promise.reject(err);
-    //     } finally {
-    //       isRefreshing = false;
-    //     }
-    //   }
+          return config;
+        } catch (err) {
+          // On refresh failure, logout and reject queued
+          try {
+            useAuthStore.getState().logout();
+          } catch (e) {
+            console.warn("Logout failed after token refresh error", e);
+          }
+          processQueue(err, null);
+          return Promise.reject(err);
+        } finally {
+          isRefreshing = false;
+        }
+      }
 
-    //   // If a refresh is already in progress, queue this request
-    //   return new Promise((resolve, reject) => {
-    //     failedQueue.push({
-    //       resolve: (newToken: string) => {
-    //         setAuthHeader(config, newToken);
-    //         resolve(config);
-    //       },
-    //       reject,
-    //     });
-    //   });
-    // }
+      // If a refresh is already in progress, queue this request
+      return new Promise((resolve, reject) => {
+        failedQueue.push({
+          resolve: (newToken: string) => {
+            setAuthHeader(config, newToken);
+            resolve(config);
+          },
+          reject,
+        });
+      });
+    }
 
     // If we have a valid token, attach it
     if (token) {

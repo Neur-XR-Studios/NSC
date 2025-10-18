@@ -167,7 +167,7 @@ const VideoPlayerInner: React.ForwardRefRenderFunction<VideoPlayerHandle, VideoP
     }
   }, [externalCurrentMs]);
 
-  // Sync external playing state
+  // Sync external playing state (immediate pause for consistency with Unity group sync)
   useEffect(() => {
     const el = videoRef.current;
     if (!el) return;
@@ -175,7 +175,9 @@ const VideoPlayerInner: React.ForwardRefRenderFunction<VideoPlayerHandle, VideoP
       if (externalPlaying && el.paused) {
         el.play().catch(() => {/* ignore */});
       } else if (!externalPlaying && !el.paused) {
+        // Immediate pause - no delay
         el.pause();
+        setPlaying(false);
       }
     }
   }, [externalPlaying]);

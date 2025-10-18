@@ -37,7 +37,7 @@ interface Props {
   journeys: JourneyItem[];
   seekValues: Record<string, number>;
   setSeekValues: (updater: (prev: Record<string, number>) => Record<string, number>) => void;
-  sendCmd: (sessionId: string, type: "play" | "pause" | "seek" | "stop", positionMs?: number) => void;
+  sendCmd: (sessionId: string, type: "play" | "pause" | "seek" | "stop", positionMs?: number, journeyId?: number) => void;
   sendParticipantCmd?: (
     pair: { vrId: string; chairId: string },
     type: "play" | "pause" | "seek" | "stop",
@@ -75,7 +75,9 @@ export default function ControllerStep({
   const [audioSel, setAudioSel] = useState<Record<string, string>>({});
   const [currentJourneyIdx, setCurrentJourneyIdx] = useState(0);
   const [isSessionPlaying, setIsSessionPlaying] = useState(false);
-  // console.log(onlineById);
+  
+  // Debug logging
+  console.log('[ControllerStep] sessionType:', sessionType, 'pairs:', pairs.length, 'activePair:', activePair?.sessionId);
 
   // For group sessions, collect all pairs in the same session for display
   const sessionPairs = useMemo(
@@ -297,7 +299,8 @@ export default function ControllerStep({
                               playerRefs.current[key]?.play?.();
                             });
                             setIsSessionPlaying(true);
-                            sendCmd(activePair.sessionId, "play");
+                            const currentJourney = journeyCards[currentJourneyIdx];
+                            sendCmd(activePair.sessionId, "play", 0, currentJourney?.jid);
                           }}
                           className="inline-flex items-center justify-center rounded bg-white/10 hover:bg-white/20 text-white"
                         >
@@ -321,7 +324,8 @@ export default function ControllerStep({
                               playerRefs.current[key]?.pause?.();
                             });
                             setIsSessionPlaying(false);
-                            sendCmd(activePair.sessionId, "pause", currentMs);
+                            const currentJourney = journeyCards[currentJourneyIdx];
+                            sendCmd(activePair.sessionId, "pause", currentMs, currentJourney?.jid);
                           }}
                           className="inline-flex items-center justify-center rounded bg-white/10 hover:bg-white/20 text-white"
                         >
@@ -365,7 +369,8 @@ export default function ControllerStep({
                                 const key = `${sp.vrId}-${sp.chairId}`;
                                 playerRefs.current[key]?.seekTo?.(val);
                               });
-                              sendCmd(activePair.sessionId, "seek", val);
+                              const currentJourney = journeyCards[currentJourneyIdx];
+                              sendCmd(activePair.sessionId, "seek", val, currentJourney?.jid);
                             }
                             // keep paused; do not auto play after manual seek
                             pausedOnDragRef.current = false;
@@ -378,7 +383,8 @@ export default function ControllerStep({
                                 const key = `${sp.vrId}-${sp.chairId}`;
                                 playerRefs.current[key]?.seekTo?.(val);
                               });
-                              sendCmd(activePair.sessionId, "seek", val);
+                              const currentJourney = journeyCards[currentJourneyIdx];
+                              sendCmd(activePair.sessionId, "seek", val, currentJourney?.jid);
                             }
                             // keep paused; do not auto play after manual seek
                             pausedOnDragRef.current = false;
@@ -427,18 +433,21 @@ export default function ControllerStep({
                     const target = journeyCards[nextIdx];
                     const ok =
                       typeof window !== "undefined"
-                        ? window.confirm(`Switch to journey ${String(target?.jid ?? "")}?`)
+                        ? window.confirm(`Switch to journey ${String(target?.jid ?? "")}? Playback will pause.`)
                         : true;
                     if (ok && target) {
+                      // Pause all players and reset to 0
+                      sessionPairs.forEach((sp) => {
+                        const key = `${sp.vrId}-${sp.chairId}`;
+                        playerRefs.current[key]?.pause?.();
+                        playerRefs.current[key]?.seekTo?.(0);
+                      });
+                      setIsSessionPlaying(false);
+                      setCurrentJourneyIdx(nextIdx);
+                      setSeekValues((prev) => ({ ...prev, [activePair.sessionId]: 0 }));
+                      // Send select_journey with pause
                       commandSession(activePair.sessionId, "select_journey", { journeyId: target.jid }).catch(() => {});
                     }
-                    setCurrentJourneyIdx(nextIdx);
-                    setSeekValues((prev) => ({ ...prev, [activePair.sessionId]: 0 }));
-                    sessionPairs.forEach((sp) => {
-                      const key = `${sp.vrId}-${sp.chairId}`;
-                      playerRefs.current[key]?.pause?.();
-                      playerRefs.current[key]?.seekTo?.(0);
-                    });
                   }
                 }}
               >
@@ -451,17 +460,20 @@ export default function ControllerStep({
                     onClick={() => {
                       if (activePair) {
                         const ok =
-                          typeof window !== "undefined" ? window.confirm(`Switch to journey ${String(jc.jid)}?`) : true;
+                          typeof window !== "undefined" ? window.confirm(`Switch to journey ${String(jc.jid)}? Playback will pause.`) : true;
                         if (ok) {
+                          // Pause all players and reset to 0
+                          sessionPairs.forEach((sp) => {
+                            const key = `${sp.vrId}-${sp.chairId}`;
+                            playerRefs.current[key]?.pause?.();
+                            playerRefs.current[key]?.seekTo?.(0);
+                          });
+                          setIsSessionPlaying(false);
+                          setCurrentJourneyIdx(idx);
+                          setSeekValues((prev) => ({ ...prev, [activePair.sessionId]: 0 }));
+                          // Send select_journey with pause
                           commandSession(activePair.sessionId, "select_journey", { journeyId: jc.jid }).catch(() => {});
                         }
-                        setCurrentJourneyIdx(idx);
-                        setSeekValues((prev) => ({ ...prev, [activePair.sessionId]: 0 }));
-                        sessionPairs.forEach((sp) => {
-                          const key = `${sp.vrId}-${sp.chairId}`;
-                          playerRefs.current[key]?.pause?.();
-                          playerRefs.current[key]?.seekTo?.(0);
-                        });
                       }
                     }}
                     className={
@@ -491,17 +503,20 @@ export default function ControllerStep({
                     const target = journeyCards[nextIdx];
                     const ok =
                       typeof window !== "undefined"
-                        ? window.confirm(`Switch to journey ${String(target?.jid ?? "")}?`)
+                        ? window.confirm(`Switch to journey ${String(target?.jid ?? "")}? Playback will pause.`)
                         : true;
                     if (ok && target) {
-                      commandSession(activePair.sessionId, "select_journey", { journeyId: target.jid }).catch(() => {});
-                      setCurrentJourneyIdx(nextIdx);
-                      setSeekValues((prev) => ({ ...prev, [activePair.sessionId]: 0 }));
+                      // Pause all players and reset to 0
                       sessionPairs.forEach((sp) => {
                         const key = `${sp.vrId}-${sp.chairId}`;
                         playerRefs.current[key]?.pause?.();
                         playerRefs.current[key]?.seekTo?.(0);
                       });
+                      setIsSessionPlaying(false);
+                      setCurrentJourneyIdx(nextIdx);
+                      setSeekValues((prev) => ({ ...prev, [activePair.sessionId]: 0 }));
+                      // Send select_journey with pause
+                      commandSession(activePair.sessionId, "select_journey", { journeyId: target.jid }).catch(() => {});
                     }
                   }
                 }}
@@ -650,14 +665,26 @@ export default function ControllerStep({
                           </div>
                         )}
 
-                        {/* Audio controls */}
-                        {tracks.length > 0 && (
-                          <div className="flex items-center gap-2">
+                        {/* Audio/Language controls */}
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs text-slate-400">Language:</label>
+                          {tracks.length > 0 ? (
                             <select
                               aria-label="Select audio track"
                               className="bg-slate-900 border border-slate-700 text-xs text-slate-200 rounded px-2 py-1"
                               value={selSrc}
-                              onChange={(e) => setAudioSel((prev) => ({ ...prev, [key]: e.target.value }))}
+                              onChange={(e) => {
+                                const selectedUrl = e.target.value;
+                                const selectedTrack = tracks.find((t) => t.url === selectedUrl);
+                                const languageCode = selectedTrack?.language_code || "";
+                                
+                                setAudioSel((prev) => ({ ...prev, [key]: selectedUrl }));
+                                
+                                // For individual mode, language selection per journey
+                                if (sessionType === "individual" && currentJid && languageCode) {
+                                  console.log(`[ControllerStep] Language selected for journey ${currentJid}: ${languageCode}`);
+                                }
+                              }}
                             >
                               {tracks.map((t, idx) => {
                                 const url = t.url || "";
@@ -669,8 +696,10 @@ export default function ControllerStep({
                                 );
                               })}
                             </select>
-                          </div>
-                        )}
+                          ) : (
+                            <span className="text-xs text-slate-500 italic">No audio tracks available</span>
+                          )}
+                        </div>
                       </div>
                       {/* Participant journey selection (Individual) */}
                       {sessionType === "individual" && (
@@ -683,9 +712,17 @@ export default function ControllerStep({
                                 onClick={() => {
                                   const pid = participantIdByPair[key];
                                   if (!pid || !activePair?.sessionId) return;
-                                  console.log(`[ControllerStep] Admin selecting journey ${jc.jid} for participant ${pid} (${key})`);
+                                  
+                                  // Get selected language for this participant
+                                  const selectedAudioUrl = audioSel[key];
+                                  const tracks = (jc.item.audio_tracks || []) as { url?: string; language_code?: string }[];
+                                  const selectedTrack = tracks.find((t) => t.url === selectedAudioUrl);
+                                  const language = selectedTrack?.language_code || tracks[0]?.language_code || "";
+                                  
+                                  console.log(`[ControllerStep] Admin selecting journey ${jc.jid} for participant ${pid} (${key}) with language: ${language}`);
                                   commandParticipant(activePair.sessionId, pid, "select_journey", {
                                     journeyId: jc.jid,
+                                    language: language,
                                   }).catch((e) => {
                                     console.error(`[ControllerStep] Failed to send select_journey:`, e);
                                   });

@@ -646,6 +646,7 @@
       setK('s_id', state.id);
       player = document.getElementById('player');
       if (player) {
+        let lastStatusSent = 0;
         player.addEventListener('timeupdate', () => {
           const t = (player.currentTime || 0) * 1000;
           // Trust the video clock when playing
@@ -656,6 +657,16 @@
             const min = Math.floor(sec / 60);
             const s = sec % 60;
             setK('s_pos', `${min}:${s.toString().padStart(2, '0')}`);
+            
+            // For individual sync: send periodic position updates (every 2 seconds)
+            // so admin panel can track each user's progress with journey ID
+            if (state.sessionType === 'individual' && state.playing) {
+              const now = Date.now();
+              if (now - lastStatusSent > 2000) {
+                sendEvent('timeupdate', { positionMs: pos, journeyId: state.journeyId });
+                lastStatusSent = now;
+              }
+            }
           }
         });
         player.addEventListener('play', () => {
@@ -670,6 +681,10 @@
         player.addEventListener('ended', () => {
           state.playing = false; setK('s_state', '⏹ Stopped');
           sendEvent('stop');
+        });
+        player.addEventListener('seeking', () => {
+          // Send seek event when user manually seeks
+          sendEvent('seek', { positionMs: Math.floor(state.positionMs) });
         });
       }
       // Restore sessionId from storage if present
@@ -861,7 +876,14 @@
 
     function handleCmd(data) {
       const cmd = (data.command || data.type || '').toLowerCase();
+      // Extract journeyId from command if present
+      const cmdJourneyId = data.journeyId != null ? String(data.journeyId) : null;
+      
       if (cmd === 'start' || cmd === 'play') {
+        // If journeyId specified and different from current, switch journey first
+        if (cmdJourneyId && cmdJourneyId !== state.journeyId) {
+          selectAndLoadJourney(cmdJourneyId);
+        }
         if (typeof data.positionMs === 'number') state.positionMs = data.positionMs;
         if (player && player.src) {
           try { if (typeof data.positionMs === 'number') player.currentTime = Math.max(0, data.positionMs / 1000); } catch {}
@@ -896,7 +918,11 @@
         leaveSession();
       } else if (cmd === 'select_journey') {
         const jid = (data.journeyId != null ? String(data.journeyId) : '').trim();
+        const lang = (data.language || '').trim();
+        log(`Selecting journey ${jid} with language: ${lang || 'default'}`);
         selectAndLoadJourney(jid);
+        // Note: HTML simulator doesn't have full audio track support
+        // Unity will use the language parameter to select the correct audio track
       }
       setK('s_pos', `Position: ${Math.max(0, Math.floor(state.positionMs))} ms`);
       // Also emit a status update

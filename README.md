@@ -8,6 +8,11 @@ This repo contains a Dockerized full-stack app:
 
 Redis is not required and has been removed.
 
+## 🆕 Recent Updates
+- ✅ **File persistence fixed**: Uploaded files (videos, audio, telemetry) now persist across Docker rebuilds
+- ✅ **LAN access support**: Configure the app to work on your local network (see [NETWORK_SETUP.md](NETWORK_SETUP.md))
+- ✅ **Quick setup script**: Use `./setup-lan.sh` for automatic network configuration
+
 ## Prerequisites
 - Docker Desktop (or Docker Engine + Docker Compose V2)
 
@@ -19,11 +24,24 @@ cd NSC
 ```
 
 2. Configure environment
-- Edit `./.env.docker` if needed. Defaults are provided. Key items:
-  - `BACKEND_PORT=8001` (host port mapping for API)
-  - `FRONTEND_PORT=8002` (host port mapping for UI)
-  - `VITE_API_URL=http://localhost:8001/api` (frontend build-time API base URL)
-  - `VITE_MQTT_WS_URL=ws://localhost:9001` (frontend MQTT WebSocket)
+
+**Option A: Localhost (default)**
+```bash
+# Use defaults in .env.docker - no changes needed
+docker compose --env-file .env.docker up -d --build
+```
+
+**Option B: LAN Access (recommended for VR devices)**
+```bash
+# Automatic setup (detects your IP and configures everything)
+./setup-lan.sh
+
+# OR manual setup: Edit .env.docker and set:
+# VITE_API_BASE_URL=http://YOUR_IP:8001
+# VITE_MQTT_WS_URL=ws://YOUR_IP:9001
+```
+
+See [NETWORK_SETUP.md](NETWORK_SETUP.md) for detailed LAN configuration.
 
 3. Build and start
 ```

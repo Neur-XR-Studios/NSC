@@ -7,10 +7,12 @@ import { usePaginatedList } from "@/hooks/usePaginatedList";
 import type { ApiEnvelope } from "@/types/pagination";
 import type { JourneyItem } from "@/types/journey";
 import { ViewJourneyModal } from "@/components/modals/ViewJourneyModal";
-import { Edit, Eye } from "lucide-react";
+import { Edit, Eye, Trash2 } from "lucide-react";
 import { CreateAssetModal } from "@/components/modals/CreateAssetModal";
 import { EditAssetModal } from "@/components/modals/EditAssetModal";
 import { useUIStore } from "@/store/ui";
+import { deleteJourney } from "@/lib/journeys";
+import { toast } from "sonner";
 
 export default function Assets() {
     const [open, setOpen] = useState(false)
@@ -32,6 +34,32 @@ export default function Assets() {
     const canPrev = page > 1
     const canNext = page < totalPages
 
+    const handleDelete = async (item: JourneyItem) => {
+        const journeyId = item.journey?.id;
+        if (!journeyId) {
+            toast.error("Journey ID not found");
+            return;
+        }
+
+        const title = item.journey?.title || "this journey";
+        const confirmed = window.confirm(
+            `⚠️ Delete "${title}"?\n\nThis will permanently delete:\n• Journey record\n• Video file and thumbnail\n• All audio tracks\n• Telemetry file\n\nThis action cannot be undone!`
+        );
+
+        if (!confirmed) return;
+
+        try {
+            await deleteJourney(journeyId);
+            toast.success("Journey deleted successfully");
+            void refresh();
+        } catch (error: unknown) {
+            console.error("Delete error:", error);
+            const errorMessage = error && typeof error === 'object' && 'message' in error 
+                ? String(error.message) 
+                : "Failed to delete journey";
+            toast.error(errorMessage);
+        }
+    };
 
     return (
 
@@ -114,6 +142,14 @@ export default function Assets() {
                                                 onClick={() => { setSelected(it); setEditOpen(true) }}
                                             >
                                                 <Edit />
+                                            </Button>
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                className={customCss.buttonOutline + ' h-8 w-8 hover:bg-red-500/10 hover:text-red-500 hover:border-red-500'}
+                                                onClick={() => handleDelete(it)}
+                                            >
+                                                <Trash2 />
                                             </Button>
                                         </div>
                                     </div>

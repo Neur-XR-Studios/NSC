@@ -121,12 +121,13 @@ export async function commandParticipant(
   sessionId: string,
   participantId: string,
   cmd: ParticipantCommand,
-  options?: { positionMs?: number; durationMs?: number; journeyId?: number }
+  options?: { positionMs?: number; durationMs?: number; journeyId?: number; language?: string }
 ) {
-  const body: { cmd: ParticipantCommand; positionMs?: number; durationMs?: number; journeyId?: number } = { cmd };
+  const body: { cmd: ParticipantCommand; positionMs?: number; durationMs?: number; journeyId?: number; language?: string } = { cmd };
   if (typeof options?.positionMs === "number") body.positionMs = options.positionMs;
   if (typeof options?.durationMs === "number") body.durationMs = options.durationMs;
   if (typeof options?.journeyId === "number") body.journeyId = options.journeyId;
+  if (options?.language) body.language = options.language;
   return api.post(`sessions/${sessionId}/participants/${participantId}/commands`, body);
 }
 
