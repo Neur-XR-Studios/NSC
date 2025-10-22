@@ -25,6 +25,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING(8),
       allowNull: true,
     },
+    current_journey_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
     joined_at: {
       type: DataTypes.DATE,
       allowNull: true,
@@ -64,6 +68,8 @@ module.exports = (sequelize, DataTypes) => {
     SessionParticipant.belongsTo(models.Session, { foreignKey: 'session_id', as: 'session' });
     SessionParticipant.belongsTo(models.VRDevice, { foreignKey: 'vr_device_id', as: 'vr' });
     SessionParticipant.belongsTo(models.ChairDevice, { foreignKey: 'chair_device_id', as: 'chair' });
+    // TODO: Add journey association once the journey model is properly defined
+    // SessionParticipant.belongsTo(models.journey, { foreignKey: 'current_journey_id', as: 'currentJourney' });
     SessionParticipant.hasMany(models.PlaybackEntry, { foreignKey: 'participant_id', as: 'playbacks' });
   };
 

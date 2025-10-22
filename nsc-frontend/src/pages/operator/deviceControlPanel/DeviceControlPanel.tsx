@@ -23,6 +23,7 @@ type Device = {
   currentJourneyId?: number;
   lastEvent?: string;
   lastEventTimestamp?: string;
+  language?: string;
 };
 
 type Pair = {
@@ -90,6 +91,12 @@ export default function DeviceControlPanel() {
     () => pairs.find((p) => p.sessionId === activeSessionId) || null,
     [pairs, activeSessionId],
   );
+  // Allow controller to remain visible even when all pairs are unpaired.
+  // We pass a fallback activePair with only the sessionId so Stop/commands can still address the session.
+  const activePairForController = useMemo(
+    () => activePair || (activeSessionId ? { sessionId: activeSessionId, vrId: "", chairId: "", journeyId: [] as number[] } : null),
+    [activePair, activeSessionId],
+  );
   const [seekValues, setSeekValues] = useState<Record<string, number>>({});
   const [currentStep, setCurrentStep] = useState<FlowStep>("session-type");
   const [sessionType, setSessionType] = useState<SessionType | null>(null);
@@ -151,15 +158,14 @@ export default function DeviceControlPanel() {
           const seededPairs = (participants || [])
             .filter((m) => m.vr_device_id && m.chair_device_id)
             .map((m) => ({ sessionId: sid, vrId: String(m.vr_device_id), chairId: String(m.chair_device_id), journeyId: jids }));
-          if (seededPairs.length > 0) {
-            setPairs(seededPairs);
-            setActiveSessionId(sid);
-            setSelectedJourneyIds(jids.map((x) => String(x)));
-            setSessionType((s.session_type as SessionType) || null);
-            // Ensure journeys are populated when jumping straight into controller
-            void loadJourneys();
-            setCurrentStep("controller");
-          }
+          // Always set active session and go to controller, even if there are zero seeded pairs
+          setPairs(seededPairs);
+          setActiveSessionId(sid);
+          setSelectedJourneyIds(jids.map((x) => String(x)));
+          setSessionType((s.session_type as SessionType) || null);
+          // Ensure journeys are populated when jumping straight into controller
+          void loadJourneys();
+          setCurrentStep("controller");
         }
       } catch {
         // ignore fetch errors; remain in flow
@@ -276,6 +282,7 @@ export default function DeviceControlPanel() {
             }
             if (typeof data?.positionMs === "number") cur.positionMs = Number(data.positionMs);
             if (typeof data?.sessionId === "string") cur.sessionId = String(data.sessionId);
+            if (typeof data?.language === "string") cur.language = String(data.language);
             cur.lastSeen = Date.now();
             map.set(id, cur);
             return map;
@@ -307,6 +314,7 @@ export default function DeviceControlPanel() {
             }
             if (typeof data?.positionMs === "number") cur.positionMs = Number(data.positionMs);
             if (typeof data?.sessionId === "string") cur.sessionId = String(data.sessionId);
+            if (typeof data?.language === "string") cur.language = String(data.language);
             cur.lastEvent = event;
             cur.lastEventTimestamp = String(data?.timestamp || "");
             cur.lastSeen = Date.now();
@@ -597,9 +605,9 @@ export default function DeviceControlPanel() {
   }, [devicesList]);
 
   const deviceInfoById = useMemo(() => {
-    const map: Record<string, { status?: string; positionMs?: number; sessionId?: string; currentJourneyId?: number; lastEvent?: string }> = {};
+    const map: Record<string, { status?: string; positionMs?: number; sessionId?: string; currentJourneyId?: number; lastEvent?: string; language?: string }> = {};
     for (const d of devicesList) {
-      map[d.id] = { status: d.status, positionMs: d.positionMs, sessionId: d.sessionId, currentJourneyId: d.currentJourneyId, lastEvent: d.lastEvent };
+      map[d.id] = { status: d.status, positionMs: d.positionMs, sessionId: d.sessionId, currentJourneyId: d.currentJourneyId, lastEvent: d.lastEvent, language: d.language };
     }
     return map;
   }, [devicesList]);
@@ -670,9 +678,9 @@ export default function DeviceControlPanel() {
           )}
 
           {/* Step 4: Controller */}
-          {currentStep === "controller" && activePair && (
+          {currentStep === "controller" && (
             <ControllerStep
-              activePair={activePair}
+              activePair={activePairForController}
               journeys={journeys}
               seekValues={seekValues}
               setSeekValues={(updater) => setSeekValues((prev) => updater(prev))}

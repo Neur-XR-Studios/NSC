@@ -98,6 +98,7 @@ export type ParticipantRecord = {
   chair_device_id: string;
   language?: string | null;
   journey_id?: number | null;
+  current_journey_id?: number | null;
   created_at?: string;
   updated_at?: string;
 };
@@ -137,6 +138,8 @@ export interface SessionDetailsParticipant {
   vr_device_id?: string | null;
   chair_device_id?: string | null;
   journey_id?: number | null;
+  current_journey_id?: number | null;
+  language?: string | null;
 }
 export interface SessionDetailsEnvelope {
   status?: boolean;
@@ -150,6 +153,14 @@ export interface SessionDetailsEnvelope {
 }
 
 export async function getSessionById(sessionId: string): Promise<SessionDetailsEnvelope> {
-  const res = await api.get<SessionDetailsEnvelope>(`sessions/${sessionId}`);
-  return res?.data as SessionDetailsEnvelope;
+  const res = await api.get<any>(`sessions/${sessionId}`);
+  const body = res?.data;
+  // Handle both shapes:
+  // 1) { status: boolean, data: { ...session... } }
+  // 2) { id: string, status: 'ready' | 'running' | ..., participants: [...] }
+  if (body && typeof body === 'object' && 'data' in body && typeof (body as any).status === 'boolean') {
+    return { status: (body as any).status, data: (body as any).data } as SessionDetailsEnvelope;
+  }
+  // Fallback: treat body as the raw session object
+  return { status: true, data: body as SessionDetailsEnvelope['data'] } as SessionDetailsEnvelope;
 }

@@ -37,7 +37,12 @@ interface Props {
   journeys: JourneyItem[];
   seekValues: Record<string, number>;
   setSeekValues: (updater: (prev: Record<string, number>) => Record<string, number>) => void;
-  sendCmd: (sessionId: string, type: "play" | "pause" | "seek" | "stop", positionMs?: number, journeyId?: number) => void;
+  sendCmd: (
+    sessionId: string,
+    type: "play" | "pause" | "seek" | "stop",
+    positionMs?: number,
+    journeyId?: number,
+  ) => void;
   sendParticipantCmd?: (
     pair: { vrId: string; chairId: string },
     type: "play" | "pause" | "seek" | "stop",
@@ -48,7 +53,17 @@ interface Props {
   pairs?: Pair[];
   setPairs?: (updater: (prev: Pair[]) => Pair[]) => void;
   onlineById?: Record<string, boolean>;
-  deviceInfoById?: Record<string, { status?: string; positionMs?: number; sessionId?: string; currentJourneyId?: number; lastEvent?: string }>;
+  deviceInfoById?: Record<
+    string,
+    {
+      status?: string;
+      positionMs?: number;
+      sessionId?: string;
+      currentJourneyId?: number;
+      lastEvent?: string;
+      language?: string;
+    }
+  >;
   vrDevices?: Device[];
   chairDevices?: Device[];
   sessionType?: "individual" | "group" | null;
@@ -71,13 +86,22 @@ export default function ControllerStep({
   sessionType = null,
   sendParticipantCmd,
 }: Props) {
+  const DEBUG = false;
   // Per-participant audio selection state (declare hooks before any early return)
   const [audioSel, setAudioSel] = useState<Record<string, string>>({});
   const [currentJourneyIdx, setCurrentJourneyIdx] = useState(0);
   const [isSessionPlaying, setIsSessionPlaying] = useState(false);
-  
+
   // Debug logging
-  console.log('[ControllerStep] sessionType:', sessionType, 'pairs:', pairs.length, 'activePair:', activePair?.sessionId);
+  if (DEBUG)
+    console.log(
+      "[ControllerStep] sessionType:",
+      sessionType,
+      "pairs:",
+      pairs.length,
+      "activePair:",
+      activePair?.sessionId,
+    );
 
   // For group sessions, collect all pairs in the same session for display
   const sessionPairs = useMemo(
@@ -99,6 +123,15 @@ export default function ControllerStep({
         .map((jid) => ({ jid, item: journeys.find((j) => String(j.journey?.id ?? j.video?.id ?? "") === String(jid)) }))
         .filter((x) => !!x.item) as Array<{ jid: number; item: JourneyItem }>,
     [journeyIdsAll, journeys],
+  );
+
+  // Memoized list of all journeys as selectable cards (id + item)
+  const memoAllJourneyCards = useMemo(
+    () =>
+      journeys
+        .map((j) => ({ jid: Number(j?.journey?.id ?? j?.video?.id), item: j }))
+        .filter((x) => Number.isFinite(x.jid)) as Array<{ jid: number; item: JourneyItem }>,
+    [journeys],
   );
 
   const currentCard = journeyCards[currentJourneyIdx] || journeyCards[0];
@@ -127,12 +160,15 @@ export default function ControllerStep({
   const [selectedVrId, setSelectedVrId] = useState("");
   const [selectedChairId, setSelectedChairId] = useState("");
   const [showPairModal, setShowPairModal] = useState(false);
-  
+
   // Filter out already paired devices
   const pairedVrIds = useMemo(() => new Set(sessionPairs.map((p) => p.vrId)), [sessionPairs]);
   const pairedChairIds = useMemo(() => new Set(sessionPairs.map((p) => p.chairId)), [sessionPairs]);
   const availableVrDevices = useMemo(() => vrDevices.filter((d) => !pairedVrIds.has(d.id)), [vrDevices, pairedVrIds]);
-  const availableChairDevices = useMemo(() => chairDevices.filter((d) => !pairedChairIds.has(d.id)), [chairDevices, pairedChairIds]);
+  const availableChairDevices = useMemo(
+    () => chairDevices.filter((d) => !pairedChairIds.has(d.id)),
+    [chairDevices, pairedChairIds],
+  );
 
   const didInitRef = useRef(false);
   useEffect(() => {
@@ -161,37 +197,96 @@ export default function ControllerStep({
       }
     }
     didInitRef.current = true;
-  }, [activePair, journeyCards, sessionPairs, sessionType, setSeekValues]);
+  }, [activePair, journeyCards, sessionType, setSeekValues]);
 
-  // Build participantId mapping for Individual sessions
+  // Build participantId mapping for Individual sessions (batched updates)
   useEffect(() => {
     const sid = activePair?.sessionId;
-    if (!sid || sessionType !== "individual") return;
+    if (!sid || sessionType !== "individual") {
+      if (DEBUG)
+        console.log(`[ControllerStep] Skipping participant loading: sessionId=${sid}, sessionType=${sessionType}`);
+      return;
+    }
+
+    if (DEBUG) console.log(`[ControllerStep] Loading participants for session ${sid}`);
     const load = async () => {
       try {
         const res: SessionDetailsEnvelope = await getSessionById(sid);
+        if (DEBUG) console.log(`[ControllerStep] Full API response:`, res);
         const parts = res?.data?.participants || [];
-        const map: Record<string, string> = {};
+        if (DEBUG) console.log(`[ControllerStep] Loaded ${parts.length} participants:`, parts);
+
+        const nextMap: Record<string, string> = {};
+        const nextSelected: Record<string, number> = {};
+        const nextAudio: Record<string, string> = {};
         parts.forEach((m) => {
           const vr = String(m.vr_device_id || "");
           const ch = String(m.chair_device_id || "");
           const pid = String(m.id || "");
-          const jid = m.journey_id;
+          const jid = m.current_journey_id || m.journey_id; // Check both fields
+          const lang = m.language;
+
+          if (DEBUG) {
+            console.log(`[ControllerStep] Processing participant:`, {
+              raw: m,
+              vr,
+              chair: ch,
+              pid,
+              journey: jid,
+              lang,
+              hasId: !!m.id,
+              hasVrDevice: !!m.vr_device_id,
+              hasChairDevice: !!m.chair_device_id,
+            });
+          }
+
           if (vr && ch && pid) {
-            map[`${vr}-${ch}`] = pid;
+            const key = `${vr}-${ch}`;
+            nextMap[key] = pid;
+            if (DEBUG) console.log(`[ControllerStep] Mapped ${key} -> ${pid}`);
+
             // Load journey from backend if exists
-            if (jid != null && !selectedJourneyByPair[`${vr}-${ch}`]) {
-              setSelectedJourneyByPair((prev) => ({ ...prev, [`${vr}-${ch}`]: Number(jid) }));
+            if (jid != null) {
+              nextSelected[key] = Number(jid);
             }
+
+            // Load language from backend if exists
+            if (lang && journeys.length > 0) {
+              const journey = journeys.find((j) => String(j.journey?.id ?? j.video?.id) === String(jid));
+              if (journey?.audio_tracks) {
+                const matchingTrack = journey.audio_tracks.find((t) => t.language_code === lang);
+                if (matchingTrack?.url) {
+                  if (DEBUG) console.log(`[ControllerStep] Setting language ${lang} for ${key}`);
+                  nextAudio[key] = matchingTrack.url!;
+                }
+              }
+            }
+          } else {
+            if (DEBUG) console.warn(`[ControllerStep] Incomplete participant data: vr=${vr}, chair=${ch}, pid=${pid}`);
           }
         });
-        setParticipantIdByPair(map);
+
+        if (DEBUG) console.log(`[ControllerStep] Final participant mapping:`, nextMap);
+        setParticipantIdByPair((prev) => (JSON.stringify(prev) !== JSON.stringify(nextMap) ? nextMap : prev));
+        setSelectedJourneyByPair((prev) => (Object.keys(nextSelected).length ? { ...prev, ...nextSelected } : prev));
+        setAudioSel((prev) => (Object.keys(nextAudio).length ? { ...prev, ...nextAudio } : prev));
       } catch (e) {
-        void e;
+        console.error(`[ControllerStep] Failed to load participants for session ${sid}:`, e);
       }
     };
     void load();
-  }, [activePair?.sessionId, sessionType, sessionPairs.length, selectedJourneyByPair]);
+  }, [activePair?.sessionId, sessionType, journeys]);
+
+  // Debug log to track state changes
+  useEffect(() => {
+    if (DEBUG)
+      console.log(
+        `[ControllerStep] State update - sessionPairs:`,
+        sessionPairs.length,
+        `participantIdByPair keys:`,
+        Object.keys(participantIdByPair),
+      );
+  }, [sessionPairs, participantIdByPair]);
 
   // Clear manual pause override once devices report not playing
   useEffect(() => {
@@ -200,32 +295,52 @@ export default function ControllerStep({
 
   // Console log device events for debugging
   useEffect(() => {
+    if (!DEBUG) return;
     sessionPairs.forEach((p) => {
       const vrInfo = deviceInfoById[p.vrId];
       const chairInfo = deviceInfoById[p.chairId];
       if (vrInfo?.lastEvent) {
-        console.log(`[ControllerStep] VR ${p.vrId} event: ${vrInfo.lastEvent}, journey: ${vrInfo.currentJourneyId}, pos: ${vrInfo.positionMs}ms, status: ${vrInfo.status}`);
+        console.log(
+          `[ControllerStep] VR ${p.vrId} event: ${vrInfo.lastEvent}, journey: ${vrInfo.currentJourneyId}, pos: ${vrInfo.positionMs}ms, status: ${vrInfo.status}`,
+        );
       }
       if (chairInfo?.lastEvent) {
-        console.log(`[ControllerStep] Chair ${p.chairId} event: ${chairInfo.lastEvent}, journey: ${chairInfo.currentJourneyId}, pos: ${chairInfo.positionMs}ms, status: ${chairInfo.status}`);
+        console.log(
+          `[ControllerStep] Chair ${p.chairId} event: ${chairInfo.lastEvent}, journey: ${chairInfo.currentJourneyId}, pos: ${chairInfo.positionMs}ms, status: ${chairInfo.status}`,
+        );
       }
     });
-  }, [deviceInfoById, sessionPairs]);
+  }, [deviceInfoById, sessionPairs, DEBUG]);
 
-  // Sync device-selected journey to UI state for Individual sessions
+  // Sync device-selected journey and language to UI state for Individual sessions
   useEffect(() => {
     if (sessionType !== "individual") return;
+    const updatesSelected: Record<string, number> = {};
+    const updatesAudio: Record<string, string> = {};
     sessionPairs.forEach((p) => {
       const key = `${p.vrId}-${p.chairId}`;
       const vrInfo = deviceInfoById[p.vrId];
       const chairInfo = deviceInfoById[p.chairId];
       const deviceJourneyId = vrInfo?.currentJourneyId ?? chairInfo?.currentJourneyId;
       if (deviceJourneyId != null && selectedJourneyByPair[key] !== deviceJourneyId) {
-        console.log(`[ControllerStep] Syncing device-selected journey for ${key}: ${deviceJourneyId}`);
-        setSelectedJourneyByPair((prev) => ({ ...prev, [key]: deviceJourneyId }));
+        if (DEBUG) console.log(`[ControllerStep] Syncing device-selected journey for ${key}: ${deviceJourneyId}`);
+        updatesSelected[key] = deviceJourneyId;
+        const deviceLanguage = vrInfo?.language ?? chairInfo?.language;
+        if (deviceLanguage) {
+          const journey = journeys.find((j) => String(j.journey?.id ?? j.video?.id) === String(deviceJourneyId));
+          if (journey?.audio_tracks) {
+            const matchingTrack = journey.audio_tracks.find((t) => t.language_code === deviceLanguage);
+            if (matchingTrack?.url) {
+              if (DEBUG) console.log(`[ControllerStep] Syncing device language ${deviceLanguage} for ${key}`);
+              updatesAudio[key] = matchingTrack.url!;
+            }
+          }
+        }
       }
     });
-  }, [deviceInfoById, sessionPairs, sessionType, selectedJourneyByPair]);
+    if (Object.keys(updatesSelected).length) setSelectedJourneyByPair((prev) => ({ ...prev, ...updatesSelected }));
+    if (Object.keys(updatesAudio).length) setAudioSel((prev) => ({ ...prev, ...updatesAudio }));
+  }, [deviceInfoById, sessionPairs, sessionType, selectedJourneyByPair, journeys]);
   return (
     <div className="space-y-6">
       <Card className="bg-slate-900/50 border-slate-800">
@@ -460,7 +575,9 @@ export default function ControllerStep({
                     onClick={() => {
                       if (activePair) {
                         const ok =
-                          typeof window !== "undefined" ? window.confirm(`Switch to journey ${String(jc.jid)}? Playback will pause.`) : true;
+                          typeof window !== "undefined"
+                            ? window.confirm(`Switch to journey ${String(jc.jid)}? Playback will pause.`)
+                            : true;
                         if (ok) {
                           // Pause all players and reset to 0
                           sessionPairs.forEach((sp) => {
@@ -536,7 +653,7 @@ export default function ControllerStep({
                   const vrOnline = !!onlineById[p.vrId];
                   const chairOnline = !!onlineById[p.chairId];
                   const key = `${p.vrId}-${p.chairId}`;
-                  
+
                   // For Individual, prefer device-selected journey from real-time events
                   const vrInfo = deviceInfoById[p.vrId];
                   const chairInfo = deviceInfoById[p.chairId];
@@ -545,7 +662,7 @@ export default function ControllerStep({
                     deviceJourneyId ??
                     selectedJourneyByPair[key] ??
                     (Array.isArray(p.journeyId) ? p.journeyId[0] : p.journeyId);
-                  
+
                   // Media item: shared (group) or per-participant (individual with device-selected journey)
                   const mediaItem =
                     sessionType === "group"
@@ -557,9 +674,7 @@ export default function ControllerStep({
                   const defaultAudio = tracks[0]?.url || "";
                   const selSrc = audioSel[key] ?? defaultAudio;
                   const seekKey = sessionType === "group" && activePair ? activePair.sessionId : key;
-                  const allJourneyCards = journeys
-                    .map((j) => ({ jid: Number(j?.journey?.id ?? j?.video?.id), item: j }))
-                    .filter((x) => Number.isFinite(x.jid)) as Array<{ jid: number; item: JourneyItem }>;
+                  const allJourneyCards = memoAllJourneyCards;
                   return (
                     <div
                       key={`${p.vrId}-${p.chairId}-${i}`}
@@ -575,9 +690,12 @@ export default function ControllerStep({
                             }}
                             src={vSrc}
                             className="w-full"
-                            isMuted={true}
-                            isShowVolume={true}
-                            isShowFullscreen={true}
+                            isMuted={false}
+                            isShowVolume={false}
+                            isShowFullscreen={false}
+                            isShowPlayPause={sessionType === "individual" ? true : false}
+                            isShowSeek={sessionType === "individual" ? true : false}
+                            isShowProgress={sessionType === "individual" ? true : false}
                             externalPlaying={vrInfo?.status === "active" || chairInfo?.status === "active"}
                             ontogglePlay={(playing: boolean) => {
                               if (!sendParticipantCmd) return;
@@ -649,14 +767,64 @@ export default function ControllerStep({
                               onClick={async () => {
                                 const sid = activePair?.sessionId;
                                 const pid = participantIdByPair[key];
-                                if (!sid || !pid) return;
+                                console.log(
+                                  `[ControllerStep] Unpair attempt: key=${key}, sessionId=${sid}, participantId=${pid}`,
+                                );
+                                console.log(`[ControllerStep] Current participantIdByPair:`, participantIdByPair);
+
+                                if (!sid || !pid) {
+                                  console.error(
+                                    `[ControllerStep] Cannot unpair: missing sessionId (${sid}) or participantId (${pid})`,
+                                  );
+                                  console.error(
+                                    `[ControllerStep] Available participant mappings:`,
+                                    Object.keys(participantIdByPair),
+                                  );
+                                  console.error(`[ControllerStep] Session pairs:`, sessionPairs.length);
+                                  console.error(`[ControllerStep] Current key:`, key);
+
+                                  // Show user-friendly error
+                                  if (typeof window !== "undefined") {
+                                    window.alert(
+                                      `Cannot unpair device: Participant not found. This might be because:\n\n1. The devices aren't properly registered in the database\n2. The session was created without proper device pairing\n\nPlease check the backend logs for more details.`,
+                                    );
+                                  }
+                                  return;
+                                }
                                 try {
+                                  console.log(
+                                    `[ControllerStep] Unpairing participant ${pid} (${key}) from session ${sid}`,
+                                  );
                                   await apiRemoveParticipant(sid, pid);
+
+                                  // Update all related state
                                   setPairs((prev) =>
                                     prev.filter((x) => !(x.vrId === p.vrId && x.chairId === p.chairId)),
                                   );
+
+                                  // Clean up participant mapping
+                                  setParticipantIdByPair((prev) => {
+                                    const newMap = { ...prev };
+                                    delete newMap[key];
+                                    return newMap;
+                                  });
+
+                                  // Clean up journey selection
+                                  setSelectedJourneyByPair((prev) => {
+                                    const newMap = { ...prev };
+                                    delete newMap[key];
+                                    return newMap;
+                                  });
+
+                                  // Clean up audio selection
+                                  setAudioSel((prev) => {
+                                    const { [key]: _, ...rest } = prev;
+                                    return rest;
+                                  });
+
+                                  console.log(`[ControllerStep] Successfully unpaired ${key}`);
                                 } catch (e) {
-                                  void e;
+                                  console.error(`[ControllerStep] Failed to unpair ${key}:`, e);
                                 }
                               }}
                             >
@@ -668,36 +836,56 @@ export default function ControllerStep({
                         {/* Audio/Language controls */}
                         <div className="flex items-center gap-2">
                           <label className="text-xs text-slate-400">Language:</label>
-                          {tracks.length > 0 ? (
-                            <select
-                              aria-label="Select audio track"
-                              className="bg-slate-900 border border-slate-700 text-xs text-slate-200 rounded px-2 py-1"
-                              value={selSrc}
-                              onChange={(e) => {
-                                const selectedUrl = e.target.value;
-                                const selectedTrack = tracks.find((t) => t.url === selectedUrl);
-                                const languageCode = selectedTrack?.language_code || "";
-                                
-                                setAudioSel((prev) => ({ ...prev, [key]: selectedUrl }));
-                                
-                                // For individual mode, language selection per journey
-                                if (sessionType === "individual" && currentJid && languageCode) {
-                                  console.log(`[ControllerStep] Language selected for journey ${currentJid}: ${languageCode}`);
-                                }
-                              }}
-                            >
-                              {tracks.map((t, idx) => {
-                                const url = t.url || "";
-                                const label = t.language_code || "";
-                                return (
-                                  <option key={`${key}-t-${idx}`} value={url}>
-                                    {label}
-                                  </option>
-                                );
-                              })}
-                            </select>
+                          {currentJid ? (
+                            tracks.length > 0 ? (
+                              <select
+                                aria-label="Select audio track"
+                                className="bg-slate-900 border border-slate-700 text-xs text-slate-200 rounded px-2 py-1"
+                                value={selSrc}
+                                onChange={(e) => {
+                                  const selectedUrl = e.target.value;
+                                  const selectedTrack = tracks.find((t) => t.url === selectedUrl);
+                                  const languageCode = selectedTrack?.language_code || "";
+
+                                  setAudioSel((prev) => ({ ...prev, [key]: selectedUrl }));
+
+                                  // For individual mode, sync language selection to device
+                                  if (
+                                    sessionType === "individual" &&
+                                    currentJid &&
+                                    languageCode &&
+                                    activePair?.sessionId
+                                  ) {
+                                    const pid = participantIdByPair[key];
+                                    if (pid) {
+                                      console.log(
+                                        `[ControllerStep] Admin changing language to ${languageCode} for participant ${pid} (${key}) on journey ${currentJid}`,
+                                      );
+                                      commandParticipant(activePair.sessionId, pid, "select_journey", {
+                                        journeyId: Number(currentJid),
+                                        language: languageCode,
+                                      }).catch((e) => {
+                                        console.error(`[ControllerStep] Failed to sync language to device:`, e);
+                                      });
+                                    }
+                                  }
+                                }}
+                              >
+                                {tracks.map((t: { url?: string; language_code?: string }, idx: number) => {
+                                  const url = t.url || "";
+                                  const label = t.language_code || "";
+                                  return (
+                                    <option key={`${key}-t-${idx}`} value={url}>
+                                      {label}
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                            ) : (
+                              <span className="text-xs text-slate-500 italic">No audio tracks available</span>
+                            )
                           ) : (
-                            <span className="text-xs text-slate-500 italic">No audio tracks available</span>
+                            <span className="text-xs text-slate-500 italic">Select a journey to choose language</span>
                           )}
                         </div>
                       </div>
@@ -706,27 +894,56 @@ export default function ControllerStep({
                         <div className="px-3 pb-2 pt-2">
                           <div className="text-xs text-slate-400 mb-2">Select Journey:</div>
                           <div className="flex items-center gap-2 flex-wrap">
-                            {allJourneyCards.map((jc) => (
+                            {allJourneyCards.map((jc: { jid: number; item: JourneyItem }) => (
                               <button
                                 key={`${key}-jc-${jc.jid}`}
                                 onClick={() => {
                                   const pid = participantIdByPair[key];
                                   if (!pid || !activePair?.sessionId) return;
-                                  
+
                                   // Get selected language for this participant
                                   const selectedAudioUrl = audioSel[key];
-                                  const tracks = (jc.item.audio_tracks || []) as { url?: string; language_code?: string }[];
+                                  const tracks = (jc.item.audio_tracks || []) as {
+                                    url?: string;
+                                    language_code?: string;
+                                  }[];
                                   const selectedTrack = tracks.find((t) => t.url === selectedAudioUrl);
                                   const language = selectedTrack?.language_code || tracks[0]?.language_code || "";
-                                  
-                                  console.log(`[ControllerStep] Admin selecting journey ${jc.jid} for participant ${pid} (${key}) with language: ${language}`);
+
+                                  console.log(
+                                    `[ControllerStep] Admin selecting journey ${jc.jid} for participant ${pid} (${key}) with language: ${language}`,
+                                  );
+
+                                  // Update local state immediately for better UX
+                                  setSelectedJourneyByPair((prev) => ({ ...prev, [key]: jc.jid }));
+
+                                  // Update audio selection to match the journey's tracks
+                                  const newTracks = (jc.item.audio_tracks || []) as {
+                                    url?: string;
+                                    language_code?: string;
+                                  }[];
+                                  if (newTracks.length > 0) {
+                                    const preferredTrack =
+                                      newTracks.find(
+                                        (t: { url?: string; language_code?: string }) => t.language_code === language,
+                                      ) || newTracks[0];
+                                    if (preferredTrack?.url) {
+                                      setAudioSel((prev) => ({ ...prev, [key]: preferredTrack.url! }));
+                                    }
+                                  }
+
+                                  // Send command to device
                                   commandParticipant(activePair.sessionId, pid, "select_journey", {
                                     journeyId: jc.jid,
                                     language: language,
                                   }).catch((e) => {
                                     console.error(`[ControllerStep] Failed to send select_journey:`, e);
+                                    // Revert local state on failure
+                                    setSelectedJourneyByPair((prev) => {
+                                      const { [key]: _, ...rest } = prev;
+                                      return rest;
+                                    });
                                   });
-                                  setSelectedJourneyByPair((prev) => ({ ...prev, [key]: jc.jid }));
                                 }}
                                 className={
                                   Number(currentJid) === Number(jc.jid)
@@ -753,10 +970,9 @@ export default function ControllerStep({
                               (x) => String(x?.journey?.id ?? x?.video?.id ?? "") === String(currentJid ?? ""),
                             );
                             return j?.journey?.title || j?.video?.title || "-";
-                          })()}
-                          {" "}
-                          <span className="text-slate-500">|
-                          Status:</span> {vrInfo?.status === "active" || chairInfo?.status === "active" ? (
+                          })()}{" "}
+                          <span className="text-slate-500">| Status:</span>{" "}
+                          {vrInfo?.status === "active" || chairInfo?.status === "active" ? (
                             <span className="text-green-400">Playing</span>
                           ) : (
                             <span className="text-slate-400">Paused</span>
@@ -778,7 +994,7 @@ export default function ControllerStep({
           <DialogHeader>
             <DialogTitle className="text-xl">Manage Device Pairs</DialogTitle>
           </DialogHeader>
-          
+
           <div className="space-y-6">
             {/* Existing Pairs */}
             <div>
@@ -795,7 +1011,7 @@ export default function ControllerStep({
                     const vrOnline = !!onlineById[pair.vrId];
                     const chairOnline = !!onlineById[pair.chairId];
                     const pid = participantIdByPair[key];
-                    
+
                     return (
                       <div
                         key={key}
@@ -814,9 +1030,9 @@ export default function ControllerStep({
                               </div>
                             </div>
                           </div>
-                          
+
                           <div className="text-slate-500">↔</div>
-                          
+
                           <div className="flex items-center gap-2">
                             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center">
                               <Armchair className="w-4 h-4 text-white" />
@@ -824,13 +1040,15 @@ export default function ControllerStep({
                             <div>
                               <div className="text-sm font-medium text-white">{pair.chairId}</div>
                               <div className="flex items-center gap-1 text-xs">
-                                <div className={`w-2 h-2 rounded-full ${chairOnline ? "bg-green-500" : "bg-slate-600"}`} />
+                                <div
+                                  className={`w-2 h-2 rounded-full ${chairOnline ? "bg-green-500" : "bg-slate-600"}`}
+                                />
                                 <span className="text-slate-400">{chairOnline ? "Online" : "Offline"}</span>
                               </div>
                             </div>
                           </div>
                         </div>
-                        
+
                         <Button
                           variant="ghost"
                           size="sm"
@@ -975,21 +1193,24 @@ export default function ControllerStep({
                     if (!sid || !selectedVrId || !selectedChairId || !setPairs) return;
                     try {
                       console.log(`[ControllerStep] Adding pair ${selectedVrId}-${selectedChairId}`);
-                      const response = await apiAddParticipant(sid, { vrDeviceId: selectedVrId, chairDeviceId: selectedChairId });
+                      const response = await apiAddParticipant(sid, {
+                        vrDeviceId: selectedVrId,
+                        chairDeviceId: selectedChairId,
+                      });
                       const newParticipantId = response?.id;
-                      
+
                       setPairs((prev) => [
                         ...prev,
                         { sessionId: sid, vrId: selectedVrId, chairId: selectedChairId, journeyId: [] },
                       ]);
-                      
+
                       // Add to participantId mapping if we got an ID back
                       if (newParticipantId) {
                         const key = `${selectedVrId}-${selectedChairId}`;
                         setParticipantIdByPair((prev) => ({ ...prev, [key]: String(newParticipantId) }));
                         console.log(`[ControllerStep] Mapped ${key} to participant ${newParticipantId}`);
                       }
-                      
+
                       setSelectedVrId("");
                       setSelectedChairId("");
                     } catch (e) {

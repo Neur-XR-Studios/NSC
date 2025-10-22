@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 const { Op } = require('sequelize');
 const { Session, VRDevice, ChairDevice, SessionParticipant, journey, JourneyAudioTrack } = require('../models');
 const mqttService = require('./MqttService');
+const logger = require('../config/logger');
 
 class SessionService {
   async startSession({ vrDeviceId, chairDeviceId, journeyId, journeyIds, groupId, session_type }) {
@@ -15,20 +16,30 @@ class SessionService {
 
     if (type === 'individual') {
       if (!vrDeviceId) errors.missingFields.push('vrDeviceId');
+      if (!chairDeviceId) errors.missingFields.push('chairDeviceId');
     }
 
     if (type === 'group' && journeys.length === 0) errors.missingFields.push('journeyIds');
 
     if (vrDeviceId) {
-      // Try by new string ID first (VR_#001 format), then fallback to hardware deviceId
-      vr = await VRDevice.findByPk(vrDeviceId);
-      if (!vr) vr = await VRDevice.findOne({ where: { deviceId: vrDeviceId } });
-      if (!vr) errors.notFoundDevices.push({ field: 'vrDeviceId', value: vrDeviceId });
+      // Try to find by primary key first, then by deviceId field
+      vr = await VRDevice.findByPk(vrDeviceId) || await VRDevice.findOne({ where: { deviceId: vrDeviceId } });
+      if (!vr) {
+        errors.notFoundDevices.push(`VR: ${vrDeviceId}`);
+        logger.warn(`[startSession] VR device not found: ${vrDeviceId}`);
+      } else {
+        logger.info(`[startSession] Found VR device: ${vr.id} (deviceId: ${vr.deviceId})`);
+      }
     }
     if (chairDeviceId) {
-      chair = await ChairDevice.findByPk(chairDeviceId);
-      if (!chair) chair = await ChairDevice.findOne({ where: { deviceId: chairDeviceId } });
-      if (!chair) errors.notFoundDevices.push({ field: 'chairDeviceId', value: chairDeviceId });
+      // Try to find by primary key first, then by deviceId field
+      chair = await ChairDevice.findByPk(chairDeviceId) || await ChairDevice.findOne({ where: { deviceId: chairDeviceId } });
+      if (!chair) {
+        errors.notFoundDevices.push(`Chair: ${chairDeviceId}`);
+        logger.warn(`[startSession] Chair device not found: ${chairDeviceId}`);
+      } else {
+        logger.info(`[startSession] Found Chair device: ${chair.id} (deviceId: ${chair.deviceId})`);
+      }
     }
 
     if (journeys.length > 0) {
@@ -66,17 +77,29 @@ class SessionService {
     });
 
     // For individual sessions, also register the initial pair as a participant
-    if (type === 'individual' && vr && chair) {
+    if (type === 'individual') {
       try {
-        await SessionParticipant.create({
+        const participantData = {
           id: uuidv4(),
           session_id: session.id,
-          vr_device_id: vr.id,
-          chair_device_id: chair.id,
+          vr_device_id: vr ? vr.id : null,
+          chair_device_id: chair ? chair.id : null,
           language: null,
           joined_at: new Date(),
+        };
+        
+        logger.info(`[startSession] Creating participant for individual session ${session.id}:`, {
+          vrDeviceId: vrDeviceId,
+          chairDeviceId: chairDeviceId,
+          vrFound: !!vr,
+          chairFound: !!chair,
+          participantData
         });
+        
+        const participant = await SessionParticipant.create(participantData);
+        logger.info(`[startSession] Successfully created participant ${participant.id} for session ${session.id}`);
       } catch (e) {
+        logger.error(`[startSession] Failed to create participant for session ${session.id}:`, e.message);
         // Non-fatal: participant creation failure should not block session creation
       }
     }
@@ -568,11 +591,15 @@ class SessionService {
         include: [
           { model: VRDevice, as: 'vr' },
           { model: ChairDevice, as: 'chair' },
+          // Note: currentJourney association might not exist, so we'll fetch journey separately if needed
         ],
         order: [['joined_at', 'ASC']],
       });
       participants = rawParts.map((p) => (p.toJSON ? p.toJSON() : p));
-    } catch {}
+      logger.info(`[getById] Loaded ${participants.length} participants for session ${plain.id}`);
+    } catch (e) {
+      logger.warn(`[getById] Failed to load participants for session ${plain.id}:`, e.message);
+    }
 
     return {
       statusCode: httpStatus.OK,
@@ -679,6 +706,8 @@ class SessionService {
 
   // Create a participant (VR + Chair) for a session and announce join_session
   async addParticipant(sessionId, { vrDeviceId, chairDeviceId, language }) {
+    logger.info(`[addParticipant] Adding participant to session ${sessionId}: vr=${vrDeviceId}, chair=${chairDeviceId}, lang=${language}`);
+    
     const errors = { missingFields: [], notFoundDevices: [] };
     if (!vrDeviceId) errors.missingFields.push('vrDeviceId');
     if (!chairDeviceId) errors.missingFields.push('chairDeviceId');
@@ -690,21 +719,34 @@ class SessionService {
 
     const vr = vrDeviceId ? await VRDevice.findByPk(vrDeviceId) || await VRDevice.findOne({ where: { deviceId: vrDeviceId } }) : null;
     const chair = chairDeviceId ? await ChairDevice.findByPk(chairDeviceId) || await ChairDevice.findOne({ where: { deviceId: chairDeviceId } }) : null;
-    if (!vr && vrDeviceId) errors.notFoundDevices.push({ field: 'vrDeviceId', value: vrDeviceId });
-    if (!chair && chairDeviceId) errors.notFoundDevices.push({ field: 'chairDeviceId', value: chairDeviceId });
+    
+    logger.info(`[addParticipant] Device lookup results: vr=${!!vr}, chair=${!!chair}`);
+    
+    if (!vr && vrDeviceId) {
+      errors.notFoundDevices.push({ field: 'vrDeviceId', value: vrDeviceId });
+      logger.warn(`[addParticipant] VR device not found: ${vrDeviceId}`);
+    }
+    if (!chair && chairDeviceId) {
+      errors.notFoundDevices.push({ field: 'chairDeviceId', value: chairDeviceId });
+      logger.warn(`[addParticipant] Chair device not found: ${chairDeviceId}`);
+    }
 
     if (errors.missingFields.length || errors.notFoundDevices.length) {
       return { statusCode: httpStatus.BAD_REQUEST, response: { status: false, message: 'Validation failed', errors } };
     }
 
-    const participant = await SessionParticipant.create({
+    const participantData = {
       id: uuidv4(),
       session_id: session.id,
       vr_device_id: vr.id,
       chair_device_id: chair.id,
       language: language || null,
       joined_at: new Date(),
-    });
+    };
+    
+    logger.info(`[addParticipant] Creating participant:`, participantData);
+    const participant = await SessionParticipant.create(participantData);
+    logger.info(`[addParticipant] Successfully created participant ${participant.id}`);
 
     // Broadcast join_session to devices
     try {
@@ -802,12 +844,18 @@ class SessionService {
       }
     } catch { /* noop */ }
 
-    // Persist participant's current journey selection if applicable
+    // Persist participant's current journey selection and language if applicable
     if (cmd === 'select_journey' && journeyId != null) {
       try {
-        // if the column exists, update it; ignore errors silently otherwise
-        await participant.update({ current_journey_id: journeyId });
-      } catch {}
+        const updateData = { current_journey_id: journeyId };
+        if (language) {
+          updateData.language = language;
+        }
+        await participant.update(updateData);
+        logger.info(`[commandParticipant] Updated participant ${participantId} journey: ${journeyId}, language: ${language || 'unchanged'}`);
+      } catch (e) {
+        logger.warn(`[commandParticipant] Failed to update participant ${participantId}:`, e.message);
+      }
     }
 
     return { statusCode: httpStatus.OK, response: { status: true, data: { topic, payload } } };
