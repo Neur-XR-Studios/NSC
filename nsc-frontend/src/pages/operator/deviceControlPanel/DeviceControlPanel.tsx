@@ -60,7 +60,8 @@ interface SessionsEnvelope {
 export default function DeviceControlPanel() {
   // Connection form state
   // Use explicit backend URL for bridge (Socket.IO). Default to localhost:8001 during dev.
-  const backendUrl = (import.meta.env.VITE_BACKEND_URL as string) || 'http://localhost:8001';
+  const backendUrl = (import.meta.env.VITE_BACKEND_URL as string)
+    || (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:8001` : 'http://localhost:8001');
   const mqttWsUrl = (import.meta.env.VITE_MQTT_WS_URL as string) || 'ws://localhost:9001';
   const [forceBridge] = useState<boolean>(true);
   const [mqttUrl] = useState<string>(forceBridge ? backendUrl : mqttWsUrl);
@@ -101,6 +102,7 @@ export default function DeviceControlPanel() {
   const [currentStep, setCurrentStep] = useState<FlowStep>("session-type");
   const [sessionType, setSessionType] = useState<SessionType | null>(null);
   const [selectedJourneyIds, setSelectedJourneyIds] = useState<string[]>([]);
+  const [selectedJourneyLangs, setSelectedJourneyLangs] = useState<Record<string, string>>({});
 
   // Logs
   const [logs, setLogs] = useState<string[]>([]);
@@ -163,9 +165,48 @@ export default function DeviceControlPanel() {
           setActiveSessionId(sid);
           setSelectedJourneyIds(jids.map((x) => String(x)));
           setSessionType((s.session_type as SessionType) || null);
-          // Ensure journeys are populated when jumping straight into controller
-          void loadJourneys();
-          setCurrentStep("controller");
+          // Only enter controller if session is not completed/stopped
+          const overall = (s as any)?.overall_status as string | undefined;
+          const status = (s as any)?.status as string | undefined;
+          if (overall !== 'completed' && status !== 'stopped') {
+            void loadJourneys();
+            setCurrentStep("controller");
+            try { localStorage.setItem('nsc_active_session_id', sid); } catch {}
+          } else {
+            try { localStorage.removeItem('nsc_active_session_id'); } catch {}
+            setActiveSessionId("");
+            setCurrentStep('session-type');
+          }
+        } else {
+          // Fallback: restore last active session by ID if present
+          try {
+            const storedId = localStorage.getItem('nsc_active_session_id');
+            if (storedId) {
+              const det = await getSessionById(storedId);
+              const sid = det?.data?.id as string;
+              if (sid) {
+                const jids = Array.isArray(det?.data?.journey_ids) ? (det!.data!.journey_ids as number[]) : [];
+                const participants = Array.isArray(det?.data?.participants) ? (det!.data!.participants as ParticipantRec[]) : [];
+                const seededPairs = (participants || [])
+                  .filter((m) => m.vr_device_id && m.chair_device_id)
+                  .map((m) => ({ sessionId: sid, vrId: String(m.vr_device_id), chairId: String(m.chair_device_id), journeyId: jids }));
+                setPairs(seededPairs);
+                setActiveSessionId(sid);
+                setSelectedJourneyIds(jids.map((x) => String(x)));
+                setSessionType((det?.data?.session_type as SessionType) || null);
+                const overall = (det as any)?.data?.overall_status as string | undefined;
+                const status = (det as any)?.data?.status as string | undefined;
+                if (overall !== 'completed' && status !== 'stopped') {
+                  void loadJourneys();
+                  setCurrentStep('controller');
+                } else {
+                  try { localStorage.removeItem('nsc_active_session_id'); } catch {}
+                  setActiveSessionId("");
+                  setCurrentStep('session-type');
+                }
+              }
+            }
+          } catch {}
         }
       } catch {
         // ignore fetch errors; remain in flow
@@ -242,10 +283,8 @@ export default function DeviceControlPanel() {
     (msg: { destinationName: string; payloadString?: string }) => {
       const t = msg.destinationName;
       const p = msg.payloadString || "";
-      console.log("Message received: ", t, p);
       try {
         if (t === "devices/discovery/announce") {
-          console.log("Announcement received for device: ", t.split("/")[1]);
           const d = JSON.parse(p || "{}");
           const id = d.deviceId;
           if (!id) return;
@@ -263,7 +302,6 @@ export default function DeviceControlPanel() {
             return map;
           });
         } else if (t.startsWith("devices/") && t.endsWith("/status")) {
-          console.log("Status received for device: ", t.split("/")[1]);
           const id = t.split("/")[1];
           const data = JSON.parse(p || "{}");
           renderDevices((map) => {
@@ -288,7 +326,6 @@ export default function DeviceControlPanel() {
             return map;
           });
         } else if (t.startsWith("devices/") && t.endsWith("/heartbeat")) {
-          console.log("Heartbeat received for device: ", t.split("/")[1]);
           const id = t.split("/")[1];
           renderDevices((map) => {
             const cur: Device = map.get(id) || { id, type: "unknown", name: id, online: false };
@@ -297,11 +334,9 @@ export default function DeviceControlPanel() {
             return map;
           });
         } else if (t.startsWith("devices/") && t.endsWith("/events")) {
-          console.log(p, t);
           const id = t.split("/")[1];
           const data = JSON.parse(p || "{}");
           const event = String(data?.event || "");
-          log(`[Device Event] ${id}: ${event} (journey: ${data?.journeyId || "?"}, pos: ${data?.positionMs || 0}ms)`);
           renderDevices((map) => {
             const cur: Device = map.get(id) || { id, type: "unknown", name: id, online: false };
             if (event === "select_journey" && data?.journeyId != null) {
@@ -478,13 +513,15 @@ export default function DeviceControlPanel() {
   const sendCmd = useCallback(
     (sessionId: string, type: "play" | "pause" | "seek" | "stop", positionMs?: number, journeyId?: number) => {
       const p = pairs.find((x) => x.sessionId === sessionId);
-      if (!p) {
-        alert("Session not found");
-        return;
-      }
+      // Always use session command API when sessionId is available
       if (sessionId) {
         const cmd = type === "play" ? "start" : (type as "pause" | "seek" | "stop");
         void commandSession(sessionId, cmd, { positionMs: Number(positionMs || 0), journeyId });
+        return;
+      }
+      // Fallback path (no sessionId) – publish directly to device topics when available
+      if (!p) {
+        alert("No target devices available for command");
         return;
       }
       const payload = {
@@ -554,6 +591,7 @@ export default function DeviceControlPanel() {
       // Ensure journeys are loaded for Individual mode (chips list uses all journeys)
       void loadJourneys();
       log(`Individual session created: ${sid} with ${pairs.length} pair(s)`);
+      try { localStorage.setItem('nsc_active_session_id', sid); } catch {}
       // Instruct all paired devices to join this session
       broadcastSessionJoin(sid, pairs.map((p) => ({ ...p, sessionId: sid })));
     } catch (e) {
@@ -566,7 +604,18 @@ export default function DeviceControlPanel() {
     try {
       if (pairs.length === 0 || !selectedJourneyIds) return;
       
-      const payloadMembers = pairs.map((p) => ({ vrDeviceId: p.vrId, chairDeviceId: p.chairId, language: "en" }));
+      // Choose a default language to start with for the group:
+      // if multiple journeys selected, prefer the first selected journey's chosen language; fallback to first track's language
+      let defaultLang: string | null = null;
+      const firstJid = selectedJourneyIds[0];
+      if (firstJid && selectedJourneyLangs[firstJid!]) {
+        defaultLang = selectedJourneyLangs[firstJid!];
+      } else {
+        const j = journeys.find((x) => String(x.journey?.id ?? x.video?.id ?? '') === String(firstJid ?? ''));
+        const langCode = j?.audio_tracks?.[0]?.language_code;
+        defaultLang = typeof langCode === 'string' ? langCode : null;
+      }
+      const payloadMembers = pairs.map((p) => ({ vrDeviceId: p.vrId, chairDeviceId: p.chairId, language: defaultLang || undefined }));
       const res = await createGroupSession({
         session_type: "group",
         members: payloadMembers,
@@ -672,6 +721,8 @@ export default function DeviceControlPanel() {
               sessionType={sessionType}
               selectedJourneyIds={selectedJourneyIds}
               setSelectedJourneyIds={(updater: (prev: string[]) => string[]) => setSelectedJourneyIds((prev) => updater(prev))}
+              selectedJourneyLangs={selectedJourneyLangs}
+              setSelectedJourneyLangs={(updater: (prev: Record<string, string>) => Record<string, string>) => setSelectedJourneyLangs((prev) => updater(prev))}
               onCreateIndividual={() => void handleCreateIndividual()}
               onCreateGroup={() => void handleCreateGroup()}
             />

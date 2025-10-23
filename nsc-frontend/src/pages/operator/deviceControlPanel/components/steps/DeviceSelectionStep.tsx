@@ -62,8 +62,6 @@ export default function DeviceSelectionStep({
     void load();
   }, []);
 
-  console.log({ registeredVrIds, registeredChairIds });
-
   const { vrRegistered, vrUnregistered, chairRegistered, chairUnregistered } = useMemo(() => {
     const vrRegistered = vrDevices.filter((d) => registeredVrIds.includes(d.id));
     const vrUnregistered = vrDevices.filter((d) => !registeredVrIds.includes(d.id));

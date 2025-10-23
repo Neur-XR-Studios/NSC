@@ -5,7 +5,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import {
   Armchair,
   Headset,
-  PlayCircle,
   Dot,
   CirclePower,
   Play as PlayIcon,
@@ -16,6 +15,7 @@ import {
   X,
   Plus,
 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 import type { JourneyItem } from "@/types/journey";
 import { VideoPlayer, type VideoPlayerHandle } from "@/components/media/VideoPlayer";
 import {
@@ -86,22 +86,11 @@ export default function ControllerStep({
   sessionType = null,
   sendParticipantCmd,
 }: Props) {
-  const DEBUG = false;
+  const { toast } = useToast();
   // Per-participant audio selection state (declare hooks before any early return)
   const [audioSel, setAudioSel] = useState<Record<string, string>>({});
   const [currentJourneyIdx, setCurrentJourneyIdx] = useState(0);
   const [isSessionPlaying, setIsSessionPlaying] = useState(false);
-
-  // Debug logging
-  if (DEBUG)
-    console.log(
-      "[ControllerStep] sessionType:",
-      sessionType,
-      "pairs:",
-      pairs.length,
-      "activePair:",
-      activePair?.sessionId,
-    );
 
   // For group sessions, collect all pairs in the same session for display
   const sessionPairs = useMemo(
@@ -161,6 +150,53 @@ export default function ControllerStep({
   const [selectedChairId, setSelectedChairId] = useState("");
   const [showPairModal, setShowPairModal] = useState(false);
 
+  // Toast-based confirmation (shadcn). Returns a Promise<boolean>.
+  const confirmWithToast = (message: string): Promise<boolean> => {
+    return new Promise((resolve) => {
+      const t = toast({
+        title: "Confirm",
+        description: (
+          <div className="space-y-3">
+            <div className="text-sm text-slate-200">{message}</div>
+            <div className="flex gap-2">
+              <button
+                className="px-3 py-1 rounded bg-emerald-600 text-white text-xs"
+                onClick={() => {
+                  t.dismiss();
+                  resolve(true);
+                }}
+              >
+                Confirm
+              </button>
+              <button
+                className="px-3 py-1 rounded bg-slate-700 text-white text-xs"
+                onClick={() => {
+                  t.dismiss();
+                  resolve(false);
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ),
+        duration: Infinity,
+        style: {
+          zIndex: 9999,
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
+          width: "100%",
+          maxWidth: "400px",
+          padding: "1rem",
+          borderRadius: "8px",
+          boxShadow: "0 4px 10px rgba(0, 0, 0, 0.1)",
+        },
+      });
+    });
+  };
+
   // Filter out already paired devices
   const pairedVrIds = useMemo(() => new Set(sessionPairs.map((p) => p.vrId)), [sessionPairs]);
   const pairedChairIds = useMemo(() => new Set(sessionPairs.map((p) => p.chairId)), [sessionPairs]);
@@ -202,20 +238,26 @@ export default function ControllerStep({
   // Build participantId mapping for Individual sessions (batched updates)
   useEffect(() => {
     const sid = activePair?.sessionId;
-    if (!sid || sessionType !== "individual") {
-      if (DEBUG)
-        console.log(`[ControllerStep] Skipping participant loading: sessionId=${sid}, sessionType=${sessionType}`);
-      return;
-    }
-
-    if (DEBUG) console.log(`[ControllerStep] Loading participants for session ${sid}`);
+    if (!sid) return;
     const load = async () => {
       try {
-        const res: SessionDetailsEnvelope = await getSessionById(sid);
-        if (DEBUG) console.log(`[ControllerStep] Full API response:`, res);
+        const res: SessionDetailsEnvelope = await getSessionById(sid!);
+        // If session has been stopped/completed, clear and bail out
+        const overall = (res as any)?.data?.overall_status;
+        const status = (res as any)?.data?.status;
+        if (overall === "completed" || status === "stopped") {
+          try {
+            setPairs?.((prev) => prev.filter((p) => p.sessionId !== sid));
+          } catch {}
+          try {
+            setParticipantIdByPair({});
+            setSelectedJourneyByPair({});
+            setAudioSel({});
+            setSeekValues((prev) => ({ ...prev, [sid]: 0 }));
+          } catch {}
+          return;
+        }
         const parts = res?.data?.participants || [];
-        if (DEBUG) console.log(`[ControllerStep] Loaded ${parts.length} participants:`, parts);
-
         const nextMap: Record<string, string> = {};
         const nextSelected: Record<string, number> = {};
         const nextAudio: Record<string, string> = {};
@@ -226,24 +268,9 @@ export default function ControllerStep({
           const jid = m.current_journey_id || m.journey_id; // Check both fields
           const lang = m.language;
 
-          if (DEBUG) {
-            console.log(`[ControllerStep] Processing participant:`, {
-              raw: m,
-              vr,
-              chair: ch,
-              pid,
-              journey: jid,
-              lang,
-              hasId: !!m.id,
-              hasVrDevice: !!m.vr_device_id,
-              hasChairDevice: !!m.chair_device_id,
-            });
-          }
-
           if (vr && ch && pid) {
             const key = `${vr}-${ch}`;
             nextMap[key] = pid;
-            if (DEBUG) console.log(`[ControllerStep] Mapped ${key} -> ${pid}`);
 
             // Load journey from backend if exists
             if (jid != null) {
@@ -256,17 +283,14 @@ export default function ControllerStep({
               if (journey?.audio_tracks) {
                 const matchingTrack = journey.audio_tracks.find((t) => t.language_code === lang);
                 if (matchingTrack?.url) {
-                  if (DEBUG) console.log(`[ControllerStep] Setting language ${lang} for ${key}`);
                   nextAudio[key] = matchingTrack.url!;
                 }
               }
             }
           } else {
-            if (DEBUG) console.warn(`[ControllerStep] Incomplete participant data: vr=${vr}, chair=${ch}, pid=${pid}`);
           }
         });
 
-        if (DEBUG) console.log(`[ControllerStep] Final participant mapping:`, nextMap);
         setParticipantIdByPair((prev) => (JSON.stringify(prev) !== JSON.stringify(nextMap) ? nextMap : prev));
         setSelectedJourneyByPair((prev) => (Object.keys(nextSelected).length ? { ...prev, ...nextSelected } : prev));
         setAudioSel((prev) => (Object.keys(nextAudio).length ? { ...prev, ...nextAudio } : prev));
@@ -277,40 +301,9 @@ export default function ControllerStep({
     void load();
   }, [activePair?.sessionId, sessionType, journeys]);
 
-  // Debug log to track state changes
-  useEffect(() => {
-    if (DEBUG)
-      console.log(
-        `[ControllerStep] State update - sessionPairs:`,
-        sessionPairs.length,
-        `participantIdByPair keys:`,
-        Object.keys(participantIdByPair),
-      );
-  }, [sessionPairs, participantIdByPair]);
-
-  // Clear manual pause override once devices report not playing
   useEffect(() => {
     if (!isPlaying) manualPausedRef.current = false;
   }, [isPlaying]);
-
-  // Console log device events for debugging
-  useEffect(() => {
-    if (!DEBUG) return;
-    sessionPairs.forEach((p) => {
-      const vrInfo = deviceInfoById[p.vrId];
-      const chairInfo = deviceInfoById[p.chairId];
-      if (vrInfo?.lastEvent) {
-        console.log(
-          `[ControllerStep] VR ${p.vrId} event: ${vrInfo.lastEvent}, journey: ${vrInfo.currentJourneyId}, pos: ${vrInfo.positionMs}ms, status: ${vrInfo.status}`,
-        );
-      }
-      if (chairInfo?.lastEvent) {
-        console.log(
-          `[ControllerStep] Chair ${p.chairId} event: ${chairInfo.lastEvent}, journey: ${chairInfo.currentJourneyId}, pos: ${chairInfo.positionMs}ms, status: ${chairInfo.status}`,
-        );
-      }
-    });
-  }, [deviceInfoById, sessionPairs, DEBUG]);
 
   // Sync device-selected journey and language to UI state for Individual sessions
   useEffect(() => {
@@ -323,7 +316,6 @@ export default function ControllerStep({
       const chairInfo = deviceInfoById[p.chairId];
       const deviceJourneyId = vrInfo?.currentJourneyId ?? chairInfo?.currentJourneyId;
       if (deviceJourneyId != null && selectedJourneyByPair[key] !== deviceJourneyId) {
-        if (DEBUG) console.log(`[ControllerStep] Syncing device-selected journey for ${key}: ${deviceJourneyId}`);
         updatesSelected[key] = deviceJourneyId;
         const deviceLanguage = vrInfo?.language ?? chairInfo?.language;
         if (deviceLanguage) {
@@ -331,7 +323,6 @@ export default function ControllerStep({
           if (journey?.audio_tracks) {
             const matchingTrack = journey.audio_tracks.find((t) => t.language_code === deviceLanguage);
             if (matchingTrack?.url) {
-              if (DEBUG) console.log(`[ControllerStep] Syncing device language ${deviceLanguage} for ${key}`);
               updatesAudio[key] = matchingTrack.url!;
             }
           }
@@ -388,7 +379,20 @@ export default function ControllerStep({
             <Button
               onClick={() => {
                 if (!activePair) return;
-                sendCmd(activePair.sessionId, "stop");
+                const sid = activePair.sessionId;
+                // Send stop to backend
+                sendCmd(sid, "stop");
+                // Immediately unpair all devices from this session locally to avoid stale reloads
+                try {
+                  setPairs?.((prev) => prev.filter((p) => p.sessionId !== sid));
+                } catch {}
+                try {
+                  setParticipantIdByPair({});
+                  setSelectedJourneyByPair({});
+                  setAudioSel({});
+                  if (sid) setSeekValues((prev) => ({ ...prev, [sid]: 0 }));
+                } catch {}
+                // Navigate back to new session flow
                 onNewSession();
               }}
               variant="destructive"
@@ -541,15 +545,14 @@ export default function ControllerStep({
                 variant="outline"
                 size="sm"
                 className="h-8 px-2 py-0 text-xs border-slate-700 text-slate-300 hover:bg-slate-800"
-                onClick={() => {
+                onClick={async () => {
                   if (currentJourneyIdx <= 0) return;
                   const nextIdx = currentJourneyIdx - 1;
                   if (activePair) {
                     const target = journeyCards[nextIdx];
-                    const ok =
-                      typeof window !== "undefined"
-                        ? window.confirm(`Switch to journey ${String(target?.jid ?? "")}? Playback will pause.`)
-                        : true;
+                    const ok = await confirmWithToast(
+                      `Switch to journey ${String(target?.jid ?? "")}\? Playback will pause.`,
+                    );
                     if (ok && target) {
                       // Pause all players and reset to 0
                       sessionPairs.forEach((sp) => {
@@ -572,12 +575,9 @@ export default function ControllerStep({
                 {journeyCards.map((jc, idx) => (
                   <button
                     key={`jc-${jc.jid}`}
-                    onClick={() => {
+                    onClick={async () => {
                       if (activePair) {
-                        const ok =
-                          typeof window !== "undefined"
-                            ? window.confirm(`Switch to journey ${String(jc.jid)}? Playback will pause.`)
-                            : true;
+                        const ok = await confirmWithToast(`Switch to journey ${String(jc.jid)}\? Playback will pause.`);
                         if (ok) {
                           // Pause all players and reset to 0
                           sessionPairs.forEach((sp) => {
@@ -613,15 +613,14 @@ export default function ControllerStep({
                 variant="outline"
                 size="sm"
                 className="h-8 px-2 py-0 text-xs border-slate-700 text-slate-300 hover:bg-slate-800"
-                onClick={() => {
+                onClick={async () => {
                   if (currentJourneyIdx >= journeyCards.length - 1) return;
                   const nextIdx = currentJourneyIdx + 1;
                   if (activePair) {
                     const target = journeyCards[nextIdx];
-                    const ok =
-                      typeof window !== "undefined"
-                        ? window.confirm(`Switch to journey ${String(target?.jid ?? "")}? Playback will pause.`)
-                        : true;
+                    const ok = await confirmWithToast(
+                      `Switch to journey ${String(target?.jid ?? "")}\? Playback will pause.`,
+                    );
                     if (ok && target) {
                       // Pause all players and reset to 0
                       sessionPairs.forEach((sp) => {
@@ -639,6 +638,18 @@ export default function ControllerStep({
                 }}
               >
                 Next
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-2 py-0 text-xs border-slate-700 text-slate-300 hover:bg-slate-800"
+                onClick={() => {
+                  if (!activePair) return;
+                  const currentJourney = journeyCards[currentJourneyIdx];
+                  commandSession(activePair.sessionId, "sync", { journeyId: currentJourney?.jid }).catch(() => {});
+                }}
+              >
+                Sync
               </Button>
             </div>
           )}
@@ -658,6 +669,9 @@ export default function ControllerStep({
                   const vrInfo = deviceInfoById[p.vrId];
                   const chairInfo = deviceInfoById[p.chairId];
                   const deviceJourneyId = vrInfo?.currentJourneyId ?? chairInfo?.currentJourneyId;
+                  const devicePositionMs = vrInfo?.positionMs;
+
+                  if (key === "VR_#001-CHAIR_#001") console.log("devicePositionMs", devicePositionMs, key);
                   const currentJid =
                     deviceJourneyId ??
                     selectedJourneyByPair[key] ??
@@ -697,6 +711,13 @@ export default function ControllerStep({
                             isShowSeek={sessionType === "individual" ? true : false}
                             isShowProgress={sessionType === "individual" ? true : false}
                             externalPlaying={vrInfo?.status === "active" || chairInfo?.status === "active"}
+                            externalCurrentMs={
+                              sessionType === "individual" &&
+                              typeof devicePositionMs === "number" &&
+                              isFinite(devicePositionMs)
+                                ? devicePositionMs
+                                : undefined
+                            }
                             ontogglePlay={(playing: boolean) => {
                               if (!sendParticipantCmd) return;
                               if (playing) {
@@ -708,21 +729,50 @@ export default function ControllerStep({
                             }}
                             onSeekEnd={(ms: number) => {
                               if (!sendParticipantCmd) return;
-                              console.log(`[ControllerStep] Admin seeking to ${ms}ms for ${key}`);
                               sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "seek", ms);
                             }}
                             onTimeUpdateMs={(ms: number) => {
                               if (!activePair?.sessionId) return;
                               if (dragging) return;
                               const clamped = Math.max(0, Math.min(durationMs || 0, Math.floor(ms || 0)));
-                              setSeekValues((prev) => ({ ...prev, [seekKey]: clamped }));
+                              if (seekKey) setSeekValues((prev) => ({ ...prev, [seekKey]: clamped }));
                             }}
                           />
                         ) : (
-                          <div className="w-full aspect-video bg-black/80 flex items-center justify-center">
-                            <PlayCircle className="w-10 h-10 text-slate-700" />
+                          <div className="w-full aspect-video bg-slate-800 flex items-center justify-center text-slate-400">
+                            Missing video source
                           </div>
                         )}
+                        {/* {sessionType === "group" && Array.isArray(tracks) && tracks.length > 0 && (
+                          <div className="p-3 border-t border-slate-800 bg-slate-900/40">
+                            <label className="block text-xs text-slate-400 mb-1">Audio Language</label>
+                            <select
+                              value={(tracks.find((t) => t.url === selSrc)?.language_code) || tracks[0]?.language_code || ''}
+                              onChange={(e) => {
+                                const lang = e.target.value;
+                                // Update local selection for this pair's audio source
+                                const match = tracks.find((t) => t.language_code === lang);
+                                if (match?.url) setAudioSel((prev) => ({ ...prev, [key]: match.url! }));
+                                // Send select_journey with language to server for group sync
+                                if (activePair) {
+                                  const targetJid = currentJid || journeyCards[currentJourneyIdx]?.jid;
+                                  if (targetJid) {
+                                    commandSession(activePair.sessionId, "select_journey", { journeyId: targetJid, language: lang }).catch(() => {});
+                                  }
+                                }
+                              }}
+                              className="w-full bg-slate-800/80 border border-slate-700 text-slate-200 text-sm rounded px-2 py-1"
+                            >
+                              {tracks
+                                .filter((t) => !!t.language_code)
+                                .map((t) => (
+                                  <option key={`${key}-${currentJid}-${t.id}-${t.language_code}`} value={t.language_code!}>
+                                    {t.language_code}
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+                        )} */}
                       </div>
                       <div className="p-3 flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
@@ -767,11 +817,6 @@ export default function ControllerStep({
                               onClick={async () => {
                                 const sid = activePair?.sessionId;
                                 const pid = participantIdByPair[key];
-                                console.log(
-                                  `[ControllerStep] Unpair attempt: key=${key}, sessionId=${sid}, participantId=${pid}`,
-                                );
-                                console.log(`[ControllerStep] Current participantIdByPair:`, participantIdByPair);
-
                                 if (!sid || !pid) {
                                   console.error(
                                     `[ControllerStep] Cannot unpair: missing sessionId (${sid}) or participantId (${pid})`,
@@ -792,9 +837,6 @@ export default function ControllerStep({
                                   return;
                                 }
                                 try {
-                                  console.log(
-                                    `[ControllerStep] Unpairing participant ${pid} (${key}) from session ${sid}`,
-                                  );
                                   await apiRemoveParticipant(sid, pid);
 
                                   // Update all related state
@@ -821,8 +863,6 @@ export default function ControllerStep({
                                     const { [key]: _, ...rest } = prev;
                                     return rest;
                                   });
-
-                                  console.log(`[ControllerStep] Successfully unpaired ${key}`);
                                 } catch (e) {
                                   console.error(`[ControllerStep] Failed to unpair ${key}:`, e);
                                 }
@@ -858,9 +898,6 @@ export default function ControllerStep({
                                   ) {
                                     const pid = participantIdByPair[key];
                                     if (pid) {
-                                      console.log(
-                                        `[ControllerStep] Admin changing language to ${languageCode} for participant ${pid} (${key}) on journey ${currentJid}`,
-                                      );
                                       commandParticipant(activePair.sessionId, pid, "select_journey", {
                                         journeyId: Number(currentJid),
                                         language: languageCode,
@@ -910,14 +947,8 @@ export default function ControllerStep({
                                   const selectedTrack = tracks.find((t) => t.url === selectedAudioUrl);
                                   const language = selectedTrack?.language_code || tracks[0]?.language_code || "";
 
-                                  console.log(
-                                    `[ControllerStep] Admin selecting journey ${jc.jid} for participant ${pid} (${key}) with language: ${language}`,
-                                  );
-
-                                  // Update local state immediately for better UX
                                   setSelectedJourneyByPair((prev) => ({ ...prev, [key]: jc.jid }));
 
-                                  // Update audio selection to match the journey's tracks
                                   const newTracks = (jc.item.audio_tracks || []) as {
                                     url?: string;
                                     language_code?: string;
@@ -1056,7 +1087,6 @@ export default function ControllerStep({
                           onClick={async () => {
                             if (!pid || !activePair?.sessionId) return;
                             try {
-                              console.log(`[ControllerStep] Removing participant ${pid} (${key})`);
                               await apiRemoveParticipant(activePair.sessionId, pid);
                               // Update local state
                               if (setPairs) {
@@ -1192,7 +1222,6 @@ export default function ControllerStep({
                     const sid = activePair?.sessionId;
                     if (!sid || !selectedVrId || !selectedChairId || !setPairs) return;
                     try {
-                      console.log(`[ControllerStep] Adding pair ${selectedVrId}-${selectedChairId}`);
                       const response = await apiAddParticipant(sid, {
                         vrDeviceId: selectedVrId,
                         chairDeviceId: selectedChairId,
@@ -1208,7 +1237,6 @@ export default function ControllerStep({
                       if (newParticipantId) {
                         const key = `${selectedVrId}-${selectedChairId}`;
                         setParticipantIdByPair((prev) => ({ ...prev, [key]: String(newParticipantId) }));
-                        console.log(`[ControllerStep] Mapped ${key} to participant ${newParticipantId}`);
                       }
 
                       setSelectedVrId("");

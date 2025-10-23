@@ -71,8 +71,6 @@ export const useAuthStore = create<AuthState>()(
               ? "operator"
               : (userData.role as Role)) || role;
 
-              console.log(mappedRole)
-
           const nextUser: User = {
             id: (userData.uuid as string) || String(userData.id ?? "u_local"),
             name:

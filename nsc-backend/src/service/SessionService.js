@@ -218,8 +218,8 @@ class SessionService {
   /**
    * Send a command to a session and persist session state updates
    */
-  async commandAndUpdate({ sessionId, cmd, positionMs, durationMs, journeyId }) {
-    const send = this.commandSession({ sessionId, cmd, positionMs, durationMs, journeyId });
+  async commandAndUpdate({ sessionId, cmd, positionMs, durationMs, journeyId, language }) {
+    const send = this.commandSession({ sessionId, cmd, positionMs, durationMs, journeyId, language });
     const result = await send;
 
     const session = await Session.findByPk(sessionId);
@@ -236,6 +236,7 @@ class SessionService {
           await session.update({ last_command: 'seek', last_position_ms: positionMs ?? session.last_position_ms });
           break;
         case 'stop':
+          console.log('Stopping session 239', sessionId);
           await session.update({ status: 'stopped', last_command: 'stop', overall_status: 'completed' });
           break;
         case 'sync':
@@ -617,7 +618,7 @@ class SessionService {
   }
 
 
-  commandSession({ sessionId, cmd, positionMs, durationMs, journeyId }) {
+  commandSession({ sessionId, cmd, positionMs, durationMs, journeyId, language }) {
     // Publish per-command topic to align with clients: sessions/<sessionId>/commands/<cmd>
     const topic = `sessions/${sessionId}/commands/${cmd}`;
     const applyAtMs = Date.now() + 1500; // small buffer for sync
@@ -630,6 +631,7 @@ class SessionService {
         payload = { cmd: 'pause', positionMs, journeyId };
         break;
       case 'stop':
+        console.log('Stopping session 364', sessionId);
         payload = { cmd: 'stop', journeyId };
         break;
       case 'seek':
@@ -639,7 +641,7 @@ class SessionService {
         payload = { cmd: 'sync', serverTimeMs: Date.now(), journeyId };
         break;
       case 'select_journey':
-        payload = { cmd: 'select_journey', journeyId, applyAtMs };
+        payload = { cmd: 'select_journey', journeyId, language, applyAtMs };
         break;
       default:
         return { statusCode: httpStatus.BAD_REQUEST, response: { status: false, message: 'Invalid cmd' } };
@@ -650,6 +652,35 @@ class SessionService {
     try {
       global.io?.emit('mqtt_message', { topic, payload });
     } catch (e) { /* noop */ }
+
+    // Also mirror to each participant's device topics for compatibility with device subscribers
+    // This is critical for Individual sessions where devices may only listen on devices/<hw>/commands/*
+    try {
+      const { SessionParticipant, VRDevice, ChairDevice } = require('../models');
+      SessionParticipant.findAll({
+        where: { session_id: sessionId },
+        include: [
+          { model: VRDevice, as: 'vr' },
+          { model: ChairDevice, as: 'chair' },
+        ],
+      }).then((parts) => {
+        if (!Array.isArray(parts) || parts.length === 0) return;
+        for (const p of parts) {
+          const vrHw = p?.vr?.deviceId || null;
+          const chairHw = p?.chair?.deviceId || null;
+          if (vrHw) {
+            mqttService.publish(`devices/${vrHw}/commands/${cmd}`, { ...payload, sessionId }, { qos: 1, retain: false });
+            try { global.io?.emit('mqtt_message', { topic: `devices/${vrHw}/commands/${cmd}`, payload: { ...payload, sessionId } }); } catch { /* noop */ }
+          }
+          if (chairHw) {
+            mqttService.publish(`devices/${chairHw}/commands/${cmd}`, { ...payload, sessionId }, { qos: 1, retain: false });
+            try { global.io?.emit('mqtt_message', { topic: `devices/${chairHw}/commands/${cmd}`, payload: { ...payload, sessionId } }); } catch { /* noop */ }
+          }
+        }
+      }).catch(() => { /* noop */ });
+    } catch (e) {
+      // best-effort mirroring; do not fail the request
+    }
     return { statusCode: httpStatus.OK, response: { status: true, data: { topic, payload } } };
   }
 
@@ -810,6 +841,7 @@ class SessionService {
         payload = { cmd: 'pause', positionMs, journeyId };
         break;
       case 'stop':
+        console.log('Stopping participant 844', sessionId);
         payload = { cmd: 'stop', journeyId };
         break;
       case 'seek':

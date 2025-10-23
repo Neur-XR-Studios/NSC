@@ -80,13 +80,14 @@ export type SessionCommand = "start" | "pause" | "seek" | "stop" | "sync" | "sel
 export async function commandSession(
   sessionId: string,
   cmd: SessionCommand,
-  options?: { positionMs?: number; durationMs?: number; videoId?: string; journeyId?: number }
+  options?: { positionMs?: number; durationMs?: number; videoId?: string; journeyId?: number; language?: string }
 ) {
-  const body: { cmd: SessionCommand; positionMs?: number; durationMs?: number; videoId?: string; journeyId?: number } = { cmd };
+  const body: { cmd: SessionCommand; positionMs?: number; durationMs?: number; videoId?: string; journeyId?: number; language?: string } = { cmd };
   if (typeof options?.positionMs === "number") body.positionMs = options.positionMs;
   if (typeof options?.durationMs === "number") body.durationMs = options.durationMs;
   if (options?.videoId) body.videoId = options.videoId;
   if (typeof options?.journeyId === "number") body.journeyId = options.journeyId;
+  if (typeof options?.language === "string") body.language = options.language;
   return api.post(`sessions/${sessionId}/commands`, body);
 }
 

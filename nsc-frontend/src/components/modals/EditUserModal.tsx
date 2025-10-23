@@ -74,7 +74,6 @@ export const EditUserModal: React.FC<EditUserModalProps> = ({ open, onClose, onU
       phone_number: user.phone_number ?? '',
     })
     setIsFormReady(true)
-    console.log(open, JSON.stringify(form.getValues()))
   }, [open, form, user])
 
   const onSubmit = async (values: FormValues) => {

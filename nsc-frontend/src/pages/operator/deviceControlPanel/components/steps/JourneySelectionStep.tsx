@@ -12,6 +12,8 @@ interface Props {
   sessionType: SessionType | null;
   selectedJourneyIds: string[];
   setSelectedJourneyIds: (updater: (prev: string[]) => string[]) => void;
+  selectedJourneyLangs: Record<string, string>;
+  setSelectedJourneyLangs: (updater: (prev: Record<string, string>) => Record<string, string>) => void;
   onCreateIndividual: () => void;
   onCreateGroup: () => void;
 }
@@ -24,6 +26,8 @@ export default function JourneySelectionStep({
   sessionType,
   selectedJourneyIds,
   setSelectedJourneyIds,
+  selectedJourneyLangs,
+  setSelectedJourneyLangs,
   onCreateIndividual,
   onCreateGroup,
 }: Props) {
@@ -121,6 +125,34 @@ export default function JourneySelectionStep({
                     <div className="p-4">
                       <h4 className="font-semibold text-white mb-1 line-clamp-1">{title}</h4>
                       <p className="text-xs text-slate-400 line-clamp-2">{desc}</p>
+                      {/* Language Selector (visible when selected and languages available) */}
+                      {isSelected(jid) && Array.isArray(it.audio_tracks) && it.audio_tracks.length > 0 && (
+                        <div
+                          className="mt-3"
+                          onClick={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => e.stopPropagation()}
+                        >
+                          <label className="block text-xs text-slate-400 mb-1">Audio Language</label>
+                          <select
+                            value={selectedJourneyLangs[jid] || it.audio_tracks[0]?.language_code || ''}
+                            onClick={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setSelectedJourneyLangs((prev) => ({ ...prev, [jid]: val }));
+                            }}
+                            className="w-full bg-slate-800/80 border border-slate-700 text-slate-200 text-sm rounded px-2 py-1"
+                          >
+                            {it.audio_tracks
+                              .filter((t) => !!t.language_code)
+                              .map((t) => (
+                                <option key={`${jid}-${t.id}-${t.language_code}`} value={t.language_code!}>
+                                  {t.language_code}
+                                </option>
+                              ))}
+                          </select>
+                        </div>
+                      )}
                     </div>
                   </button>
                 );

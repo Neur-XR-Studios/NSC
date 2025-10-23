@@ -14,6 +14,7 @@ import Assets from './pages/admin/assets/Assets'
 import Users from './pages/admin/users/Users'
 import Devices from './pages/admin/devices/Devices'
 import DeviceControlPanel from './pages/operator/deviceControlPanel/DeviceControlPanel'
+import Sessions from './pages/admin/sessions/Sessions'
 
 function App() {
   useAuthStore((s) => s.isAuthenticated)
@@ -37,6 +38,7 @@ function App() {
           <Route path="/admin/assets" element={<Assets />} />
           <Route path="/admin/users" element={<Users />} />
           <Route path="/admin/devices" element={<Devices />} />
+          <Route path="/admin/sessions" element={<Sessions />} />
           </Route>
         </Route>
         <Route element={<RoleBasedRoute roles={["operator"]} />}>
