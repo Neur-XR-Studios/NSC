@@ -62,6 +62,7 @@ interface Props {
       currentJourneyId?: number;
       lastEvent?: string;
       language?: string;
+      playing?: boolean;
     }
   >;
   vrDevices?: Device[];
@@ -97,6 +98,7 @@ export default function ControllerStep({
     () => (activePair ? pairs.filter((p) => p.sessionId && p.sessionId === activePair.sessionId) : []),
     [activePair, pairs],
   );
+
   const journeyIdsAll = useMemo(
     () =>
       (Array.isArray(activePair?.journeyId)
@@ -228,7 +230,9 @@ export default function ControllerStep({
         });
         if (journeyIdsAlls.length > 0) {
           const target = journeyCards[0];
-          commandSession(activePair.sessionId, "select_journey", { journeyId: target?.jid }).catch(() => {});
+          commandSession(activePair.sessionId, "select_journey", { journeyId: target?.jid }).catch((e) => {
+            void e;
+          });
         }
       }
     }
@@ -243,18 +247,23 @@ export default function ControllerStep({
       try {
         const res: SessionDetailsEnvelope = await getSessionById(sid!);
         // If session has been stopped/completed, clear and bail out
-        const overall = (res as any)?.data?.overall_status;
-        const status = (res as any)?.data?.status;
+        const d = (res?.data ?? undefined) as Record<string, unknown> | undefined;
+        const overall = typeof d?.overall_status === "string" ? (d.overall_status as string) : undefined;
+        const status = typeof d?.status === "string" ? (d.status as string) : undefined;
         if (overall === "completed" || status === "stopped") {
           try {
             setPairs?.((prev) => prev.filter((p) => p.sessionId !== sid));
-          } catch {}
+          } catch (e) {
+            void e;
+          }
           try {
             setParticipantIdByPair({});
             setSelectedJourneyByPair({});
             setAudioSel({});
             setSeekValues((prev) => ({ ...prev, [sid]: 0 }));
-          } catch {}
+          } catch (e) {
+            void e;
+          }
           return;
         }
         const parts = res?.data?.participants || [];
@@ -287,7 +296,6 @@ export default function ControllerStep({
                 }
               }
             }
-          } else {
           }
         });
 
@@ -385,13 +393,17 @@ export default function ControllerStep({
                 // Immediately unpair all devices from this session locally to avoid stale reloads
                 try {
                   setPairs?.((prev) => prev.filter((p) => p.sessionId !== sid));
-                } catch {}
+                } catch (e) {
+                  void e;
+                }
                 try {
                   setParticipantIdByPair({});
                   setSelectedJourneyByPair({});
                   setAudioSel({});
                   if (sid) setSeekValues((prev) => ({ ...prev, [sid]: 0 }));
-                } catch {}
+                } catch (e) {
+                  void e;
+                }
                 // Navigate back to new session flow
                 onNewSession();
               }}
@@ -551,7 +563,7 @@ export default function ControllerStep({
                   if (activePair) {
                     const target = journeyCards[nextIdx];
                     const ok = await confirmWithToast(
-                      `Switch to journey ${String(target?.jid ?? "")}\? Playback will pause.`,
+                      `Switch to journey ${String(target?.jid ?? "")} ? Playback will pause.`,
                     );
                     if (ok && target) {
                       // Pause all players and reset to 0
@@ -564,7 +576,9 @@ export default function ControllerStep({
                       setCurrentJourneyIdx(nextIdx);
                       setSeekValues((prev) => ({ ...prev, [activePair.sessionId]: 0 }));
                       // Send select_journey with pause
-                      commandSession(activePair.sessionId, "select_journey", { journeyId: target.jid }).catch(() => {});
+                      commandSession(activePair.sessionId, "select_journey", { journeyId: target.jid }).catch((e) => {
+                        void e;
+                      });
                     }
                   }
                 }}
@@ -577,7 +591,7 @@ export default function ControllerStep({
                     key={`jc-${jc.jid}`}
                     onClick={async () => {
                       if (activePair) {
-                        const ok = await confirmWithToast(`Switch to journey ${String(jc.jid)}\? Playback will pause.`);
+                        const ok = await confirmWithToast(`Switch to journey ${String(jc.jid)} ? Playback will pause.`);
                         if (ok) {
                           // Pause all players and reset to 0
                           sessionPairs.forEach((sp) => {
@@ -589,7 +603,9 @@ export default function ControllerStep({
                           setCurrentJourneyIdx(idx);
                           setSeekValues((prev) => ({ ...prev, [activePair.sessionId]: 0 }));
                           // Send select_journey with pause
-                          commandSession(activePair.sessionId, "select_journey", { journeyId: jc.jid }).catch(() => {});
+                          commandSession(activePair.sessionId, "select_journey", { journeyId: jc.jid }).catch((e) => {
+                            void e;
+                          });
                         }
                       }
                     }}
@@ -619,7 +635,7 @@ export default function ControllerStep({
                   if (activePair) {
                     const target = journeyCards[nextIdx];
                     const ok = await confirmWithToast(
-                      `Switch to journey ${String(target?.jid ?? "")}\? Playback will pause.`,
+                      `Switch to journey ${String(target?.jid ?? "")} ? Playback will pause.`,
                     );
                     if (ok && target) {
                       // Pause all players and reset to 0
@@ -646,7 +662,9 @@ export default function ControllerStep({
                 onClick={() => {
                   if (!activePair) return;
                   const currentJourney = journeyCards[currentJourneyIdx];
-                  commandSession(activePair.sessionId, "sync", { journeyId: currentJourney?.jid }).catch(() => {});
+                  commandSession(activePair.sessionId, "sync", { journeyId: currentJourney?.jid }).catch((e) => {
+                    void e;
+                  });
                 }}
               >
                 Sync
@@ -669,9 +687,12 @@ export default function ControllerStep({
                   const vrInfo = deviceInfoById[p.vrId];
                   const chairInfo = deviceInfoById[p.chairId];
                   const deviceJourneyId = vrInfo?.currentJourneyId ?? chairInfo?.currentJourneyId;
-                  const devicePositionMs = vrInfo?.positionMs;
-
-                  if (key === "VR_#001-CHAIR_#001") console.log("devicePositionMs", devicePositionMs, key);
+                  const devicePositionMs =
+                    typeof vrInfo?.positionMs === "number" && isFinite(vrInfo.positionMs)
+                      ? vrInfo.positionMs
+                      : typeof chairInfo?.positionMs === "number" && isFinite(chairInfo.positionMs)
+                      ? chairInfo.positionMs
+                      : undefined;
                   const currentJid =
                     deviceJourneyId ??
                     selectedJourneyByPair[key] ??
@@ -710,7 +731,9 @@ export default function ControllerStep({
                             isShowPlayPause={sessionType === "individual" ? true : false}
                             isShowSeek={sessionType === "individual" ? true : false}
                             isShowProgress={sessionType === "individual" ? true : false}
-                            externalPlaying={vrInfo?.status === "active" || chairInfo?.status === "active"}
+                            externalPlaying={
+                              sessionType === "individual" ? vrInfo?.playing : vrInfo?.playing || chairInfo?.playing
+                            }
                             externalCurrentMs={
                               sessionType === "individual" &&
                               typeof devicePositionMs === "number" &&
@@ -721,9 +744,18 @@ export default function ControllerStep({
                             ontogglePlay={(playing: boolean) => {
                               if (!sendParticipantCmd) return;
                               if (playing) {
-                                sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "play");
+                                // Include current position to ensure resume on devices that require it
+                                const currentMs =
+                                  typeof devicePositionMs === "number" && isFinite(devicePositionMs)
+                                    ? devicePositionMs
+                                    : playerRefs.current[key]?.getCurrentTimeMs() || 0;
+                                sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "play", currentMs);
                               } else {
-                                const currentMs = playerRefs.current[key]?.getCurrentTimeMs() || 0;
+                                // Prefer device-reported position for accuracy in Individual mode
+                                const currentMs =
+                                  typeof devicePositionMs === "number" && isFinite(devicePositionMs)
+                                    ? devicePositionMs
+                                    : playerRefs.current[key]?.getCurrentTimeMs() || 0;
                                 sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "pause", currentMs);
                               }
                             }}
@@ -860,6 +892,7 @@ export default function ControllerStep({
 
                                   // Clean up audio selection
                                   setAudioSel((prev) => {
+                                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
                                     const { [key]: _, ...rest } = prev;
                                     return rest;
                                   });
@@ -971,6 +1004,7 @@ export default function ControllerStep({
                                     console.error(`[ControllerStep] Failed to send select_journey:`, e);
                                     // Revert local state on failure
                                     setSelectedJourneyByPair((prev) => {
+                                      // eslint-disable-next-line @typescript-eslint/no-unused-vars
                                       const { [key]: _, ...rest } = prev;
                                       return rest;
                                     });

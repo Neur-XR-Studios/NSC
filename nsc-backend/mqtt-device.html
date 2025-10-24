@@ -1,561 +1,605 @@
 <!DOCTYPE html>
 <html lang="en">
-
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MQTT Device (VR/Chair)</title>
-  <script src="https://unpkg.com/paho-mqtt@1.1.0/paho-mqtt-min.js"></script>
-  <script>
-    // Lazy load Socket.IO for bridge mode
-    function loadSocketIo(src = 'https://cdn.socket.io/4.4.1/socket.io.min.js') {
-      return new Promise((resolve, reject) => {
-        if (window.io) { return resolve(); }
-        const s = document.createElement('script'); s.src = src; s.onload = () => resolve(); s.onerror = reject; document.head.appendChild(s);
-      });
-    }
-
-    // Group/Individual session helpers
-    function joinSession() {
-      const sid = (document.getElementById('sessionInput').value || '').trim();
-      if (!sid) { alert('Enter Session ID'); return; }
-      state.sessionId = sid; setK('s_session', sid);
-      try { localStorage.setItem('nsc_device_session', sid); } catch { }
-      // Subscribe to group command topic
-      sub(`sessions/${sid}/commands/+`);
-      // Notify status with session
-      const statusPayload = { deviceId: state.id, type: state.type, status: state.playing ? 'active' : 'idle', positionMs: Math.floor(state.positionMs), sessionId: sid, timestamp: new Date().toISOString() };
-      try { if (bridge && connected) bridge.emit('device:status', statusPayload); } catch { }
-      pub(T_status(state.id), JSON.stringify(statusPayload), true);
-      // Fetch current ongoing session details and populate journeys
-      try { fetchOngoingSessionDetails(); } catch {}
-    }
-
-    function leaveSession() {
-      const sid = state.sessionId; state.sessionId = ''; setK('s_session', '-');
-      try { localStorage.removeItem('nsc_device_session'); } catch { }
-      // No global unsubscribe to avoid removing backend subs; device will ignore further messages by not matching sessionId
-      const statusPayload = { deviceId: state.id, type: state.type, status: state.playing ? 'active' : 'idle', positionMs: Math.floor(state.positionMs), sessionId: '', timestamp: new Date().toISOString() };
-      try { if (bridge && connected) bridge.emit('device:status', statusPayload); } catch { }
-      pub(T_status(state.id), JSON.stringify(statusPayload), true);
-    }
-
-    // Device -> Admin events (user-triggered commands)
-    function sendEvent(evt, extra) {
-      const payload = {
-        deviceId: state.id,
-        type: state.type,
-        event: evt,
-        positionMs: Math.floor(state.positionMs),
-        sessionId: state.sessionId || '',
-        journeyId: state.journeyId || '',
-        timestamp: new Date().toISOString(),
-        ...(extra || {})
-      };
-      // Via bridge
-      try { if (bridge && connected) bridge.emit('mqtt_publish', { topic: `devices/${state.id}/events`, payload: JSON.stringify(payload), options: { qos: 1, retain: false } }); } catch { }
-      // Also publish over MQTT topic for parity
-      pub(`devices/${state.id}/events`, JSON.stringify(payload), false);
-    }
-  </script>
-  <style>
-    * {
-      box-sizing: border-box;
-    }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-      margin: 0;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      height: 100vh;
-      overflow: hidden;
-      padding: 12px;
-    }
-
-    .container {
-      height: 100%;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-
-    .header {
-      background: rgba(255, 255, 255, 0.95);
-      backdrop-filter: blur(10px);
-      border-radius: 12px;
-      padding: 12px 20px;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-      flex-shrink: 0;
-    }
-
-    .header h1 {
-      margin: 0;
-      font-size: 20px;
-      font-weight: 700;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      display: inline;
-    }
-
-    .header .subtitle {
-      color: #6b7280;
-      font-size: 12px;
-      margin: 0;
-      display: inline;
-      margin-left: 12px;
-    }
-
-    .main-grid {
-      display: grid;
-      grid-template-columns: 350px 1fr 300px;
-      gap: 12px;
-      flex: 1;
-      min-height: 0;
-    }
-
-    .left-panel,
-    .center-panel,
-    .right-panel {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      min-height: 0;
-    }
-
-    .card {
-      background: rgba(255, 255, 255, 0.95);
-      backdrop-filter: blur(10px);
-      border: 1px solid rgba(255, 255, 255, 0.3);
-      border-radius: 12px;
-      padding: 16px;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-    }
-
-    .card-title {
-      font-size: 14px;
-      font-weight: 600;
-      margin: 0 0 12px 0;
-      color: #1f2937;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex-shrink: 0;
-    }
-
-    .card-title::before {
-      content: '';
-      width: 3px;
-      height: 16px;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      border-radius: 2px;
-    }
-
-    .form-group {
-      margin-bottom: 10px;
-    }
-
-    label {
-      font-size: 11px;
-      font-weight: 500;
-      color: #374151;
-      display: block;
-      margin-bottom: 4px;
-    }
-
-    input,
-    select {
-      width: 100%;
-      padding: 6px 10px;
-      border: 2px solid #e5e7eb;
-      border-radius: 8px;
-      font-size: 13px;
-      transition: all 0.2s;
-      background: white;
-    }
-
-    input:focus,
-    select:focus {
-      outline: none;
-      border-color: #667eea;
-      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-    }
-
-    .button-group {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-
-    button {
-      padding: 6px 12px;
-      border: none;
-      border-radius: 8px;
-      font-size: 12px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all 0.2s;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      white-space: nowrap;
-    }
-
-    button:hover {
-      transform: translateY(-1px);
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    }
-
-    button:active {
-      transform: translateY(0);
-    }
-
-    button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-      transform: none !important;
-    }
-
-    .btn-primary {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-    }
-
-    .btn-success {
-      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-      color: white;
-    }
-
-    .btn-danger {
-      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-      color: white;
-    }
-
-    .btn-secondary {
-      background: #f3f4f6;
-      color: #374151;
-      border: 2px solid #e5e7eb;
-    }
-
-    .btn-secondary:hover {
-      background: #e5e7eb;
-    }
-
-    .status-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 12px;
-      background: #f3f4f6;
-      border-radius: 20px;
-      font-size: 13px;
-      font-weight: 500;
-      color: #374151;
-    }
-
-    .status-badge.connected {
-      background: #d1fae5;
-      color: #065f46;
-    }
-
-    .status-badge.connected::before {
-      content: '';
-      width: 8px;
-      height: 8px;
-      background: #10b981;
-      border-radius: 50%;
-      animation: pulse 2s infinite;
-    }
-
-    .status-badge.disconnected::before {
-      content: '';
-      width: 8px;
-      height: 8px;
-      background: #6b7280;
-      border-radius: 50%;
-    }
-
-    @keyframes pulse {
-      0%, 100% {
-        opacity: 1;
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MQTT Device (VR/Chair)</title>
+    <script src="https://unpkg.com/paho-mqtt@1.1.0/paho-mqtt-min.js"></script>
+    <script>
+      // Lazy load Socket.IO for bridge mode
+      function loadSocketIo(src = "https://cdn.socket.io/4.4.1/socket.io.min.js") {
+        return new Promise((resolve, reject) => {
+          if (window.io) {
+            return resolve();
+          }
+          const s = document.createElement("script");
+          s.src = src;
+          s.onload = () => resolve();
+          s.onerror = reject;
+          document.head.appendChild(s);
+        });
       }
-      50% {
+
+      // Group/Individual session helpers
+      function joinSession() {
+        const sid = (document.getElementById("sessionInput").value || "").trim();
+        if (!sid) {
+          alert("Enter Session ID");
+          return;
+        }
+        state.sessionId = sid;
+        setK("s_session", sid);
+        try {
+          localStorage.setItem("nsc_device_session", sid);
+        } catch {}
+        // Subscribe to group command topic
+        sub(`sessions/${sid}/commands/+`);
+        // Notify status with session
+        const statusPayload = {
+          deviceId: state.id,
+          type: state.type,
+          status: state.playing ? "active" : "idle",
+          positionMs: Math.floor(state.positionMs),
+          sessionId: sid,
+          timestamp: new Date().toISOString(),
+        };
+        try {
+          if (bridge && connected) bridge.emit("device:status", statusPayload);
+        } catch {}
+        pub(T_status(state.id), JSON.stringify(statusPayload), true);
+        // Fetch current ongoing session details and populate journeys
+        try {
+          fetchOngoingSessionDetails();
+        } catch {}
+      }
+
+      function leaveSession() {
+        const sid = state.sessionId;
+        state.sessionId = "";
+        setK("s_session", "-");
+        try {
+          localStorage.removeItem("nsc_device_session");
+        } catch {}
+        // No global unsubscribe to avoid removing backend subs; device will ignore further messages by not matching sessionId
+        const statusPayload = {
+          deviceId: state.id,
+          type: state.type,
+          status: state.playing ? "active" : "idle",
+          positionMs: Math.floor(state.positionMs),
+          sessionId: "",
+          timestamp: new Date().toISOString(),
+        };
+        try {
+          if (bridge && connected) bridge.emit("device:status", statusPayload);
+        } catch {}
+        pub(T_status(state.id), JSON.stringify(statusPayload), true);
+      }
+
+      // Device -> Admin events (user-triggered commands)
+      function sendEvent(evt, extra) {
+        const payload = {
+          deviceId: state.id,
+          type: state.type,
+          event: evt,
+          positionMs: Math.floor(state.positionMs),
+          sessionId: state.sessionId || "",
+          journeyId: state.journeyId || "",
+          timestamp: new Date().toISOString(),
+          ...(extra || {}),
+        };
+        // Via bridge
+        try {
+          if (bridge && connected)
+            bridge.emit("mqtt_publish", {
+              topic: `devices/${state.id}/events`,
+              payload: JSON.stringify(payload),
+              options: { qos: 1, retain: false },
+            });
+        } catch {}
+        // Also publish over MQTT topic for parity
+        console.log("publishing", payload);
+        pub(`devices/${state.id}/events`, JSON.stringify(payload), false);
+      }
+    </script>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        margin: 0;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        height: 100vh;
+        overflow: hidden;
+        padding: 12px;
+      }
+
+      .container {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .header {
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
+        border-radius: 12px;
+        padding: 12px 20px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        flex-shrink: 0;
+      }
+
+      .header h1 {
+        margin: 0;
+        font-size: 20px;
+        font-weight: 700;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        display: inline;
+      }
+
+      .header .subtitle {
+        color: #6b7280;
+        font-size: 12px;
+        margin: 0;
+        display: inline;
+        margin-left: 12px;
+      }
+
+      .main-grid {
+        display: grid;
+        grid-template-columns: 350px 1fr 300px;
+        gap: 12px;
+        flex: 1;
+        min-height: 0;
+      }
+
+      .left-panel,
+      .center-panel,
+      .right-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        min-height: 0;
+      }
+
+      .card {
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+
+      .card-title {
+        font-size: 14px;
+        font-weight: 600;
+        margin: 0 0 12px 0;
+        color: #1f2937;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
+      }
+
+      .card-title::before {
+        content: "";
+        width: 3px;
+        height: 16px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border-radius: 2px;
+      }
+
+      .form-group {
+        margin-bottom: 10px;
+      }
+
+      label {
+        font-size: 11px;
+        font-weight: 500;
+        color: #374151;
+        display: block;
+        margin-bottom: 4px;
+      }
+
+      input,
+      select {
+        width: 100%;
+        padding: 6px 10px;
+        border: 2px solid #e5e7eb;
+        border-radius: 8px;
+        font-size: 13px;
+        transition: all 0.2s;
+        background: white;
+      }
+
+      input:focus,
+      select:focus {
+        outline: none;
+        border-color: #667eea;
+        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+      }
+
+      .button-group {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+
+      button {
+        padding: 6px 12px;
+        border: none;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      }
+
+      button:active {
+        transform: translateY(0);
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none !important;
+      }
+
+      .btn-primary {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+      }
+
+      .btn-success {
+        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        color: white;
+      }
+
+      .btn-danger {
+        background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+        color: white;
+      }
+
+      .btn-secondary {
+        background: #f3f4f6;
+        color: #374151;
+        border: 2px solid #e5e7eb;
+      }
+
+      .btn-secondary:hover {
+        background: #e5e7eb;
+      }
+
+      .status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        background: #f3f4f6;
+        border-radius: 20px;
+        font-size: 13px;
+        font-weight: 500;
+        color: #374151;
+      }
+
+      .status-badge.connected {
+        background: #d1fae5;
+        color: #065f46;
+      }
+
+      .status-badge.connected::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        background: #10b981;
+        border-radius: 50%;
+        animation: pulse 2s infinite;
+      }
+
+      .status-badge.disconnected::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        background: #6b7280;
+        border-radius: 50%;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.5;
+        }
+      }
+
+      .info-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 6px;
+        flex: 1;
+        overflow-y: auto;
+      }
+
+      .info-item {
+        background: #f9fafb;
+        padding: 8px;
+        border-radius: 8px;
+        border: 1px solid #e5e7eb;
+      }
+
+      .info-label {
+        font-size: 9px;
+        color: #6b7280;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 2px;
+      }
+
+      .info-value {
+        font-size: 12px;
+        font-weight: 600;
+        color: #1f2937;
+        word-break: break-all;
+      }
+
+      .log {
+        flex: 1;
+        overflow: auto;
+        background: #1f2937;
+        color: #e5e7eb;
+        font-family: "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, "Courier New", monospace;
+        font-size: 10px;
+        padding: 10px;
+        border-radius: 8px;
+        line-height: 1.4;
+        box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.3);
+      }
+
+      .log::-webkit-scrollbar {
+        width: 8px;
+      }
+
+      .log::-webkit-scrollbar-track {
+        background: #374151;
+        border-radius: 4px;
+      }
+
+      .log::-webkit-scrollbar-thumb {
+        background: #6b7280;
+        border-radius: 4px;
+      }
+
+      .journey-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+        gap: 8px;
+        flex: 1;
+        overflow-y: auto;
+        align-content: start;
+      }
+
+      .journey-card {
+        background: white;
+        border: 2px solid #e5e7eb;
+        border-radius: 10px;
+        padding: 8px;
+        cursor: pointer;
+        transition: all 0.2s;
+        text-align: center;
+      }
+
+      .journey-card:hover {
+        border-color: #667eea;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+      }
+
+      .journey-card.selected {
+        border-color: #667eea;
+        background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+      }
+
+      .journey-thumbnail {
+        width: 100%;
+        height: 70px;
+        object-fit: cover;
+        border-radius: 6px;
+        margin-bottom: 6px;
+        background: #f3f4f6;
+      }
+
+      .journey-title {
+        font-size: 11px;
+        font-weight: 600;
+        color: #1f2937;
+        margin-bottom: 2px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .journey-id {
+        font-size: 9px;
+        color: #6b7280;
+      }
+
+      video {
+        width: 100%;
+        height: 100%;
+        border-radius: 10px;
+        background: #000;
+        object-fit: contain;
+      }
+
+      .video-container {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .empty-state {
+        text-align: center;
+        padding: 40px 20px;
+        color: #9ca3af;
+      }
+
+      .empty-state svg {
+        width: 48px;
+        height: 48px;
+        margin-bottom: 12px;
         opacity: 0.5;
       }
-    }
 
-    .info-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 6px;
-      flex: 1;
-      overflow-y: auto;
-    }
+      .divider {
+        height: 1px;
+        background: #e5e7eb;
+        margin: 20px 0;
+      }
 
-    .info-item {
-      background: #f9fafb;
-      padding: 8px;
-      border-radius: 8px;
-      border: 1px solid #e5e7eb;
-    }
+      .status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 10px;
+        background: #f3f4f6;
+        border-radius: 16px;
+        font-size: 11px;
+        font-weight: 500;
+        color: #374151;
+      }
 
-    .info-label {
-      font-size: 9px;
-      color: #6b7280;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 2px;
-    }
+      .divider {
+        height: 1px;
+        background: #e5e7eb;
+        margin: 10px 0;
+      }
+    </style>
+  </head>
 
-    .info-value {
-      font-size: 12px;
-      font-weight: 600;
-      color: #1f2937;
-      word-break: break-all;
-    }
-
-    .log {
-      flex: 1;
-      overflow: auto;
-      background: #1f2937;
-      color: #e5e7eb;
-      font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
-      font-size: 10px;
-      padding: 10px;
-      border-radius: 8px;
-      line-height: 1.4;
-      box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.3);
-    }
-
-    .log::-webkit-scrollbar {
-      width: 8px;
-    }
-
-    .log::-webkit-scrollbar-track {
-      background: #374151;
-      border-radius: 4px;
-    }
-
-    .log::-webkit-scrollbar-thumb {
-      background: #6b7280;
-      border-radius: 4px;
-    }
-
-    .journey-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-      gap: 8px;
-      flex: 1;
-      overflow-y: auto;
-      align-content: start;
-    }
-
-    .journey-card {
-      background: white;
-      border: 2px solid #e5e7eb;
-      border-radius: 10px;
-      padding: 8px;
-      cursor: pointer;
-      transition: all 0.2s;
-      text-align: center;
-    }
-
-    .journey-card:hover {
-      border-color: #667eea;
-      transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
-    }
-
-    .journey-card.selected {
-      border-color: #667eea;
-      background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
-    }
-
-    .journey-thumbnail {
-      width: 100%;
-      height: 70px;
-      object-fit: cover;
-      border-radius: 6px;
-      margin-bottom: 6px;
-      background: #f3f4f6;
-    }
-
-    .journey-title {
-      font-size: 11px;
-      font-weight: 600;
-      color: #1f2937;
-      margin-bottom: 2px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .journey-id {
-      font-size: 9px;
-      color: #6b7280;
-    }
-
-    video {
-      width: 100%;
-      height: 100%;
-      border-radius: 10px;
-      background: #000;
-      object-fit: contain;
-    }
-
-    .video-container {
-      flex: 1;
-      min-height: 0;
-      display: flex;
-      flex-direction: column;
-    }
-
-    .empty-state {
-      text-align: center;
-      padding: 40px 20px;
-      color: #9ca3af;
-    }
-
-    .empty-state svg {
-      width: 48px;
-      height: 48px;
-      margin-bottom: 12px;
-      opacity: 0.5;
-    }
-
-    .divider {
-      height: 1px;
-      background: #e5e7eb;
-      margin: 20px 0;
-    }
-
-    .status-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      padding: 4px 10px;
-      background: #f3f4f6;
-      border-radius: 16px;
-      font-size: 11px;
-      font-weight: 500;
-      color: #374151;
-    }
-
-    .divider {
-      height: 1px;
-      background: #e5e7eb;
-      margin: 10px 0;
-    }
-  </style>
-</head>
-
-<body>
-  <div class="container">
-    <!-- Header -->
-    <div class="header">
-      <h1>🎮 Device Simulator</h1>
-      <span class="subtitle">VR Headset & Motion Chair Testing Interface</span>
-    </div>
-
-    <!-- Main 3-Column Grid -->
-    <div class="main-grid">
-      <!-- LEFT PANEL -->
-      <div class="left-panel">
-        <!-- Connection -->
-        <div class="card" style="flex-shrink: 0;">
-          <h2 class="card-title">Connection</h2>
-          <div class="form-group">
-            <label>Backend URL</label>
-            <input id="mqttUrl" value="http://localhost:8001" />
-          </div>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px;">
-            <div class="form-group" style="margin: 0;">
-              <label>Type</label>
-              <select id="deviceType">
-                <option value="vr">🥽 VR</option>
-                <option value="chair">💺 Chair</option>
-              </select>
-            </div>
-            <div class="form-group" style="margin: 0;">
-              <label>Device ID</label>
-              <input id="deviceId" placeholder="VR_#001" />
-            </div>
-          </div>
-          <div class="button-group">
-            <button id="btnConnect" class="btn-success" onclick="connectBroker()">⚡ Connect</button>
-            <button id="btnDisconnect" class="btn-danger" onclick="disconnectBroker()" disabled>⏹ Disconnect</button>
-          </div>
-          <div style="margin-top: 8px;">
-            <div id="connStatus" class="status-badge disconnected">Disconnected</div>
-          </div>
-        </div>
-
-        <!-- Device Info -->
-        <div class="card" style="flex: 1; min-height: 0;">
-          <h2 class="card-title">Device Info</h2>
-          <div class="info-grid">
-            <div class="info-item">
-              <div class="info-label">Type</div>
-              <div class="info-value" id="s_type">-</div>
-            </div>
-            <div class="info-item">
-              <div class="info-label">Device ID</div>
-              <div class="info-value" id="s_id">-</div>
-            </div>
-            <div class="info-item">
-              <div class="info-label">Session</div>
-              <div class="info-value" id="s_session">-</div>
-            </div>
-            <div class="info-item">
-              <div class="info-label">Peer</div>
-              <div class="info-value" id="s_peer">-</div>
-            </div>
-            <div class="info-item">
-              <div class="info-label">Journey</div>
-              <div class="info-value" id="s_journey">-</div>
-            </div>
-            <div class="info-item">
-              <div class="info-label">State</div>
-              <div class="info-value" id="s_state">idle</div>
-            </div>
-            <div class="info-item">
-              <div class="info-label">Position</div>
-              <div class="info-value" id="s_pos">0:00</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Session Management -->
-        <div class="card" style="flex-shrink: 0;">
-          <h2 class="card-title">Session</h2>
-          <div class="form-group">
-            <label>Session ID</label>
-            <input id="sessionInput" placeholder="S_XXXX" />
-          </div>
-          <div class="button-group" style="margin-bottom: 8px;">
-            <button class="btn-success" onclick="joinSession()">✓ Join</button>
-            <button class="btn-danger" onclick="leaveSession()">✗ Leave</button>
-          </div>
-          <div class="divider"></div>
-          <div class="button-group">
-            <button class="btn-secondary" onclick="sendEvent('play')">▶</button>
-            <button class="btn-secondary" onclick="sendEvent('pause')">⏸</button>
-            <button class="btn-secondary" onclick="sendEvent('stop')">⏹</button>
-            <button class="btn-secondary" onclick="sendEvent('reset')">↻</button>
-          </div>
-        </div>
+  <body>
+    <div class="container">
+      <!-- Header -->
+      <div class="header">
+        <h1>🎮 Device Simulator</h1>
+        <span class="subtitle">VR Headset & Motion Chair Testing Interface</span>
       </div>
 
-      <!-- CENTER PANEL -->
-      <div class="center-panel">
-        <!-- Video Player -->
-        <div class="card" style="flex: 2; min-height: 0;">
-          <h2 class="card-title">Video Player</h2>
-          <!-- <div class="form-group">
+      <!-- Main 3-Column Grid -->
+      <div class="main-grid">
+        <!-- LEFT PANEL -->
+        <div class="left-panel">
+          <!-- Connection -->
+          <div class="card" style="flex-shrink: 0">
+            <h2 class="card-title">Connection</h2>
+            <div class="form-group">
+              <label>Backend URL</label>
+              <input id="mqttUrl" value="http://localhost:8001" />
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px">
+              <div class="form-group" style="margin: 0">
+                <label>Type</label>
+                <select id="deviceType">
+                  <option value="vr">🥽 VR</option>
+                  <option value="chair">💺 Chair</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin: 0">
+                <label>Device ID</label>
+                <input id="deviceId" placeholder="VR_#001" />
+              </div>
+            </div>
+            <div class="button-group">
+              <button id="btnConnect" class="btn-success" onclick="connectBroker()">⚡ Connect</button>
+              <button id="btnDisconnect" class="btn-danger" onclick="disconnectBroker()" disabled>⏹ Disconnect</button>
+            </div>
+            <div style="margin-top: 8px">
+              <div id="connStatus" class="status-badge disconnected">Disconnected</div>
+            </div>
+          </div>
+
+          <!-- Device Info -->
+          <div class="card" style="flex: 1; min-height: 0">
+            <h2 class="card-title">Device Info</h2>
+            <div class="info-grid">
+              <div class="info-item">
+                <div class="info-label">Type</div>
+                <div class="info-value" id="s_type">-</div>
+              </div>
+              <div class="info-item">
+                <div class="info-label">Device ID</div>
+                <div class="info-value" id="s_id">-</div>
+              </div>
+              <div class="info-item">
+                <div class="info-label">Session</div>
+                <div class="info-value" id="s_session">-</div>
+              </div>
+              <div class="info-item">
+                <div class="info-label">Peer</div>
+                <div class="info-value" id="s_peer">-</div>
+              </div>
+              <div class="info-item">
+                <div class="info-label">Journey</div>
+                <div class="info-value" id="s_journey">-</div>
+              </div>
+              <div class="info-item">
+                <div class="info-label">State</div>
+                <div class="info-value" id="s_state">idle</div>
+              </div>
+              <div class="info-item">
+                <div class="info-label">Position</div>
+                <div class="info-value" id="s_pos">0:00</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Session Management -->
+          <div class="card" style="flex-shrink: 0">
+            <h2 class="card-title">Session</h2>
+            <div class="form-group">
+              <label>Session ID</label>
+              <input id="sessionInput" placeholder="S_XXXX" />
+            </div>
+            <div class="button-group" style="margin-bottom: 8px">
+              <button class="btn-success" onclick="joinSession()">✓ Join</button>
+              <button class="btn-danger" onclick="leaveSession()">✗ Leave</button>
+            </div>
+            <div class="divider"></div>
+            <div class="button-group">
+              <button class="btn-secondary" onclick="sendEvent('play')">▶</button>
+              <button class="btn-secondary" onclick="sendEvent('pause')">⏸</button>
+              <button class="btn-secondary" onclick="sendEvent('stop')">⏹</button>
+              <button class="btn-secondary" onclick="sendEvent('reset')">↻</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- CENTER PANEL -->
+        <div class="center-panel">
+          <!-- Video Player -->
+          <div class="card" style="flex: 2; min-height: 0">
+            <h2 class="card-title">Video Player</h2>
+            <!-- <div class="form-group">
             <label>Video URL</label>
             <input id="videoUrl" placeholder="http://localhost:8001/video/filename.mp4" />
           </div>
@@ -563,265 +607,447 @@
             <button class="btn-primary" onclick="loadVideoUrl()">📹 Load</button>
             <button class="btn-danger" onclick="clearVideoUrl()">🗑 Clear</button>
           </div> -->
-          <div class="video-container">
-            <video id="player" playsinline muted controls></video>
+            <div class="video-container">
+              <video id="player" playsinline muted controls></video>
+            </div>
+          </div>
+
+          <!-- Logs -->
+          <div class="card" style="flex: 1; min-height: 0">
+            <h2 class="card-title">System Logs</h2>
+            <div id="log" class="log"></div>
           </div>
         </div>
 
-        <!-- Logs -->
-        <div class="card" style="flex: 1; min-height: 0;">
-          <h2 class="card-title">System Logs</h2>
-          <div id="log" class="log"></div>
-        </div>
-      </div>
-
-      <!-- RIGHT PANEL -->
-      <div class="right-panel">
-        <!-- Journeys -->
-        <div class="card" style="flex: 1; min-height: 0;">
-          <h2 class="card-title">Journeys</h2>
-          <div id="journeysList" class="empty-state" style="flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column;">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width: 32px; height: 32px; margin-bottom: 8px; opacity: 0.5;">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" />
-            </svg>
-            <div style="font-size: 11px;">No session loaded</div>
+        <!-- RIGHT PANEL -->
+        <div class="right-panel">
+          <!-- Journeys -->
+          <div class="card" style="flex: 1; min-height: 0">
+            <h2 class="card-title">Journeys</h2>
+            <div
+              id="journeysList"
+              class="empty-state"
+              style="flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                style="width: 32px; height: 32px; margin-bottom: 8px; opacity: 0.5"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"
+                />
+              </svg>
+              <div style="font-size: 11px">No session loaded</div>
+            </div>
           </div>
         </div>
       </div>
     </div>
-  </div>
 
-  <script>
-    // State
-    let client = null; // Paho client (unused in forced bridge mode)
-    let bridge = null; // Socket.IO client (bridge mode)
-    let connected = false; let ticker = null; let mode = 'bridge';
-    const state = {
-      id: '', type: 'vr', name: '', sessionId: '', peer: '', journeyId: '',
-      sessionType: '',
-      playing: false, positionMs: 0, lastTick: 0
-    };
-    let player = null;
-    let backendBaseUrl = '';
+    <script>
+      // State
+      let client = null; // Paho client (unused in forced bridge mode)
+      let bridge = null; // Socket.IO client (bridge mode)
+      let connected = false;
+      let ticker = null;
+      let mode = "bridge";
+      const state = {
+        id: "",
+        type: "vr",
+        name: "",
+        sessionId: "",
+        peer: "",
+        journeyId: "",
+        sessionType: "",
+        playing: false,
+        positionMs: 0,
+        lastTick: 0,
+      };
+      let player = null;
+      let backendBaseUrl = "";
 
-    // Utils
-    function rand(n = 6) { return Math.random().toString(36).slice(2, 2 + n).toUpperCase(); }
-    function appendRand(el) { if (!el._touched) { el.value += rand(); el._touched = true; } }
-    function log(msg) { const el = document.getElementById('log'); const ts = new Date().toLocaleTimeString(); el.textContent += `[${ts}] ${msg}\n`; el.scrollTop = el.scrollHeight; console.log(msg); }
-    function setK(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
-    function setConnStatus(t, isConnected) {
-      const el = document.getElementById('connStatus');
-      if (!el) return;
-      el.textContent = t;
-      el.className = isConnected ? 'status-badge connected' : 'status-badge disconnected';
-    }
-    function loadVideoUrl() {
-      const url = (document.getElementById('videoUrl').value || '').trim();
-      if (!player) player = document.getElementById('player');
-      if (!player) return;
-      if (!url) { alert('Enter a video URL'); return; }
-      try { player.src = url; player.load(); log('Loaded video URL'); } catch (e) { log('Video load error: ' + (e?.message || e)); }
-    }
-    function clearVideoUrl() {
-      if (!player) player = document.getElementById('player');
-      if (!player) return;
-      try { player.pause(); player.removeAttribute('src'); player.load(); log('Cleared video URL'); } catch {}
-    }
+      // Utils
+      function rand(n = 6) {
+        return Math.random()
+          .toString(36)
+          .slice(2, 2 + n)
+          .toUpperCase();
+      }
+      function appendRand(el) {
+        if (!el._touched) {
+          el.value += rand();
+          el._touched = true;
+        }
+      }
+      function log(msg) {
+        const el = document.getElementById("log");
+        const ts = new Date().toLocaleTimeString();
+        el.textContent += `[${ts}] ${msg}\n`;
+        el.scrollTop = el.scrollHeight;
+        console.log(msg);
+      }
+      function setK(id, v) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = v;
+      }
+      function setConnStatus(t, isConnected) {
+        const el = document.getElementById("connStatus");
+        if (!el) return;
+        el.textContent = t;
+        el.className = isConnected ? "status-badge connected" : "status-badge disconnected";
+      }
+      function loadVideoUrl() {
+        const url = (document.getElementById("videoUrl").value || "").trim();
+        if (!player) player = document.getElementById("player");
+        if (!player) return;
+        if (!url) {
+          alert("Enter a video URL");
+          return;
+        }
+        try {
+          player.src = url;
+          player.load();
+          log("Loaded video URL");
+        } catch (e) {
+          log("Video load error: " + (e?.message || e));
+        }
+      }
+      function clearVideoUrl() {
+        if (!player) player = document.getElementById("player");
+        if (!player) return;
+        try {
+          player.pause();
+          player.removeAttribute("src");
+          player.load();
+          log("Cleared video URL");
+        } catch {}
+      }
 
-    // MQTT topics helpers (backend-aligned)
-    function T_discovery_announce() { return 'devices/discovery/announce'; }
-    function T_status(id) { return `devices/${id}/status`; }
-    function T_heartbeat(id) { return `devices/${id}/heartbeat`; }
-    function T_cmd_any(id) { return `devices/${id}/commands/+`; }
+      // MQTT topics helpers (backend-aligned)
+      function T_discovery_announce() {
+        return "devices/discovery/announce";
+      }
+      function T_status(id) {
+        return `devices/${id}/status`;
+      }
+      function T_heartbeat(id) {
+        return `devices/${id}/heartbeat`;
+      }
+      function T_cmd_any(id) {
+        return `devices/${id}/commands/+`;
+      }
 
-    function connectBroker() {
-      if (connected) return;
-      const url = document.getElementById('mqttUrl').value.trim();
-      backendBaseUrl = url;
-      // Read device type from selector; name optional/internal
-      state.type = document.getElementById('deviceType').value || 'vr';
-      state.id = document.getElementById('deviceId').value.trim() || ('DEV_' + rand(8));
-      state.name = '';
-      setK('s_type', state.type === 'vr' ? '🥽 VR' : '💺 Chair');
-      setK('s_id', state.id);
-      player = document.getElementById('player');
-      if (player) {
-        let lastStatusSent = 0;
-        player.addEventListener('timeupdate', () => {
-          const t = (player.currentTime || 0) * 1000;
-          // Trust the video clock when playing
-          if (!Number.isNaN(t)) {
-            state.positionMs = t;
-            const pos = Math.max(0, Math.floor(state.positionMs));
-            const sec = Math.floor(pos / 1000);
-            const min = Math.floor(sec / 60);
-            const s = sec % 60;
-            setK('s_pos', `${min}:${s.toString().padStart(2, '0')}`);
-            
-            // For individual sync: send periodic position updates (every 2 seconds)
-            // so admin panel can track each user's progress with journey ID
-            if (state.sessionType === 'individual' && state.playing) {
-              const now = Date.now();
-              if (now - lastStatusSent > 2000) {
-                sendEvent('timeupdate', { positionMs: pos, journeyId: state.journeyId });
-                lastStatusSent = now;
+      function connectBroker() {
+        if (connected) return;
+        const url = document.getElementById("mqttUrl").value.trim();
+        backendBaseUrl = url;
+        // Read device type from selector; name optional/internal
+        state.type = document.getElementById("deviceType").value || "vr";
+        state.id = document.getElementById("deviceId").value.trim() || "DEV_" + rand(8);
+        state.name = "";
+        setK("s_type", state.type === "vr" ? "🥽 VR" : "💺 Chair");
+        setK("s_id", state.id);
+        player = document.getElementById("player");
+        // Replace the entire video event listener section with this:
+
+        if (player) {
+          let isProcessingCommand = false;
+          let lastSentPosition = 0;
+          let lastSentEvent = "";
+          let lastEventTime = 0;
+          const EVENT_DEBOUNCE_MS = 500; // Minimum time between same events
+
+          player.addEventListener("play", () => {
+            const now = Date.now();
+            if (isProcessingCommand || (lastSentEvent === "play" && now - lastEventTime < EVENT_DEBOUNCE_MS)) {
+              return;
+            }
+
+            console.log("%cplaying", "color:green; font-size:18px;");
+            state.playing = true;
+            setK("s_state", "▶ Playing");
+            lastSentEvent = "play";
+            lastEventTime = now;
+            sendEvent("play");
+          });
+
+          player.addEventListener("pause", () => {
+            const now = Date.now();
+            if (isProcessingCommand || (lastSentEvent === "pause" && now - lastEventTime < EVENT_DEBOUNCE_MS)) {
+              return;
+            }
+
+            console.log("%cpaused", "color:orange; font-size:18px;");
+            state.playing = false;
+            setK("s_state", "⏸ Paused");
+            lastSentEvent = "pause";
+            lastEventTime = now;
+            sendEvent("pause");
+          });
+
+          player.addEventListener("ended", () => {
+            console.log("%cended", "color:red; font-size:18px;");
+            state.playing = false;
+            setK("s_state", "⏹ Stopped");
+            sendEvent("stop");
+          });
+
+          player.addEventListener("seeking", () => {
+            // Only send seek events for user-initiated seeks, not automatic ones
+            if (isProcessingCommand) {
+              return;
+            }
+
+            const currentTime = Math.floor(player.currentTime * 1000);
+            // Only send if seek is significant (more than 1 second difference)
+            if (Math.abs(currentTime - lastSentPosition) > 1000) {
+              console.log("%cseeking", "color:blue; font-size:18px;");
+              sendEvent("seek", { positionMs: currentTime });
+              lastSentPosition = currentTime;
+            }
+          });
+
+          player.addEventListener("timeupdate", () => {
+            // Update internal state but don't send events for time updates
+            const currentTime = (player.currentTime || 0) * 1000;
+            if (!Number.isNaN(currentTime)) {
+              state.positionMs = currentTime;
+              const pos = Math.max(0, Math.floor(state.positionMs));
+              const sec = Math.floor(pos / 1000);
+              const min = Math.floor(sec / 60);
+              const s = sec % 60;
+              setK("s_pos", `${min}:${s.toString().padStart(2, "0")}`);
+            }
+          });
+        }
+        // Restore sessionId from storage if present
+        try {
+          const savedSid = localStorage.getItem("nsc_device_session");
+          if (savedSid) {
+            state.sessionId = savedSid;
+            document.getElementById("sessionInput").value = savedSid;
+            setK("s_session", `Session: ${savedSid}`);
+          }
+        } catch {}
+
+        // Force Socket.IO bridge mode for simplicity
+        mode = "bridge";
+        loadSocketIo()
+          .then(() => {
+            bridge = io(url, { transports: ["websocket"] });
+            bridge.on("connect", () => {
+              connected = true;
+              setConnStatus("Connected", true);
+              log("Bridge connected to " + url);
+              toggleButtons();
+              // Identify to backend for immediate offline on disconnect
+              bridge.emit("device:identify", { deviceId: state.id, type: state.type, name: state.name });
+              // Subscribe to device command topics
+              sub(T_cmd_any(state.id));
+              // If we have a session, re-subscribe; also try to discover ongoing session and journeys
+              if (state.sessionId) {
+                sub(`sessions/${state.sessionId}/commands/+`);
               }
+              try {
+                fetchOngoingSessionDetails();
+              } catch {}
+              // announce + status
+              pub(
+                T_discovery_announce(),
+                JSON.stringify({
+                  deviceId: state.id,
+                  type: state.type,
+                  name: state.name,
+                  metadata: {},
+                  timestamp: new Date().toISOString(),
+                }),
+                false,
+              );
+              const statusPayload = {
+                deviceId: state.id,
+                type: state.type,
+                status: "active",
+                positionMs: Math.floor(state.positionMs),
+                sessionId: state.sessionId || "",
+                timestamp: new Date().toISOString(),
+              };
+              // MQTT status
+              pub(T_status(state.id), JSON.stringify(statusPayload), true);
+              // Socket.IO status fallback
+              try {
+                bridge.emit("device:status", statusPayload);
+              } catch {}
+              // Immediate heartbeat over Socket.IO and MQTT
+              try {
+                bridge.emit("device:heartbeat", {
+                  deviceId: state.id,
+                  type: state.type,
+                  status: "active",
+                  timestamp: new Date().toISOString(),
+                });
+              } catch {}
+              pub(
+                T_heartbeat(state.id),
+                JSON.stringify({ timestamp: new Date().toISOString(), status: "active" }),
+                false,
+              );
+              startTicker();
+            });
+            bridge.on("disconnect", () => {
+              connected = false;
+              setConnStatus("Disconnected", false);
+              toggleButtons();
+              stopTicker();
+            });
+            bridge.on("mqtt_message", ({ topic, payload }) => {
+              const msg = {
+                destinationName: topic,
+                payloadString: typeof payload === "string" ? payload : JSON.stringify(payload || {}),
+              };
+              onMsg(msg);
+            });
+          })
+          .catch((err) => {
+            log("Socket.IO load/connect failed: " + (err?.message || err));
+          });
+      }
+
+      function disconnectBroker() {
+        if (mode === "bridge" && bridge) {
+          bridge.disconnect();
+          bridge = null;
+        }
+        if (mode === "mqtt" && client) {
+          client.disconnect();
+          client = null;
+        }
+      }
+      function toggleButtons() {
+        document.getElementById("btnConnect").disabled = connected;
+        document.getElementById("btnDisconnect").disabled = !connected;
+      }
+
+      function sub(topic) {
+        if (!connected) return;
+        if (mode === "bridge") {
+          bridge.emit("mqtt_subscribe", { topic, options: { qos: 1 } });
+          log("Sub (bridge) " + topic);
+        } else {
+          client.subscribe(topic, { qos: 1 });
+          log("Sub " + topic);
+        }
+      }
+      function pub(topic, payload, retain = false) {
+        if (!connected) return;
+        if (mode === "bridge") {
+          bridge.emit("mqtt_publish", { topic, payload, options: { qos: 1, retain } });
+          log(`Pub (bridge) ${topic} ${payload}`);
+        } else {
+          const PahoMessage = Paho.Message || (Paho.MQTT && Paho.MQTT.Message);
+          const m = new PahoMessage(payload);
+          m.destinationName = topic;
+          m.qos = 1;
+          m.retained = retain;
+          client.send(m);
+          log(`Pub ${topic} ${payload}`);
+        }
+      }
+
+      function onMsg(msg) {
+        const t = msg.destinationName;
+        const p = msg.payloadString || "";
+        log("Msg " + t + " " + p);
+        try {
+          const cmdPrefix = `devices/${state.id}/commands/`;
+          if (t.startsWith(cmdPrefix)) {
+            const data = JSON.parse(p || "{}");
+            data.command = t.substring(cmdPrefix.length);
+            handleCmd(data);
+          } else if (state.sessionId) {
+            const sessPrefix = `sessions/${state.sessionId}/commands/`;
+            if (t.startsWith(sessPrefix)) {
+              const data = JSON.parse(p || "{}");
+              data.command = t.substring(sessPrefix.length);
+              handleCmd(data);
             }
           }
-        });
-        player.addEventListener('play', () => {
-          state.playing = true; setK('s_state', '▶ Playing');
-          // Notify admin/backend of local action
-          sendEvent('play');
-        });
-        player.addEventListener('pause', () => {
-          state.playing = false; setK('s_state', '⏸ Paused');
-          sendEvent('pause');
-        });
-        player.addEventListener('ended', () => {
-          state.playing = false; setK('s_state', '⏹ Stopped');
-          sendEvent('stop');
-        });
-        player.addEventListener('seeking', () => {
-          // Send seek event when user manually seeks
-          sendEvent('seek', { positionMs: Math.floor(state.positionMs) });
-        });
+        } catch (e) {
+          log("Parse error: " + e.message);
+        }
       }
-      // Restore sessionId from storage if present
-      try {
-        const savedSid = localStorage.getItem('nsc_device_session');
-        if (savedSid) { state.sessionId = savedSid; document.getElementById('sessionInput').value = savedSid; setK('s_session', `Session: ${savedSid}`); }
-      } catch { }
 
-      // Force Socket.IO bridge mode for simplicity
-      mode = 'bridge';
-      loadSocketIo().then(() => {
-        bridge = io(url, { transports: ['websocket'] });
-        bridge.on('connect', () => {
-          connected = true; setConnStatus('Connected', true); log('Bridge connected to ' + url); toggleButtons();
-          // Identify to backend for immediate offline on disconnect
-          bridge.emit('device:identify', { deviceId: state.id, type: state.type, name: state.name });
-          // Subscribe to device command topics
-          sub(T_cmd_any(state.id));
-          // If we have a session, re-subscribe; also try to discover ongoing session and journeys
-          if (state.sessionId) { sub(`sessions/${state.sessionId}/commands/+`); }
-          try { fetchOngoingSessionDetails(); } catch {}
-          // announce + status
-          pub(T_discovery_announce(), JSON.stringify({ deviceId: state.id, type: state.type, name: state.name, metadata: {}, timestamp: new Date().toISOString() }), false);
-          const statusPayload = { deviceId: state.id, type: state.type, status: 'active', positionMs: Math.floor(state.positionMs), sessionId: state.sessionId || '', timestamp: new Date().toISOString() };
-          // MQTT status
-          pub(T_status(state.id), JSON.stringify(statusPayload), true);
-          // Socket.IO status fallback
-          try { bridge.emit('device:status', statusPayload); } catch { }
-          // Immediate heartbeat over Socket.IO and MQTT
-          try { bridge.emit('device:heartbeat', { deviceId: state.id, type: state.type, status: 'active', timestamp: new Date().toISOString() }); } catch { }
-          pub(T_heartbeat(state.id), JSON.stringify({ timestamp: new Date().toISOString(), status: 'active' }), false);
-          startTicker();
-        });
-        bridge.on('disconnect', () => { connected = false; setConnStatus('Disconnected', false); toggleButtons(); stopTicker(); });
-        bridge.on('mqtt_message', ({ topic, payload }) => {
-          const msg = { destinationName: topic, payloadString: (typeof payload === 'string' ? payload : JSON.stringify(payload || {})) };
-          onMsg(msg);
-        });
-      }).catch(err => { log('Socket.IO load/connect failed: ' + (err?.message || err)); });
-    }
-
-    function disconnectBroker() {
-      if (mode === 'bridge' && bridge) { bridge.disconnect(); bridge = null; }
-      if (mode === 'mqtt' && client) { client.disconnect(); client = null; }
-    }
-    function toggleButtons() { document.getElementById('btnConnect').disabled = connected; document.getElementById('btnDisconnect').disabled = !connected; }
-
-    function sub(topic) {
-      if (!connected) return;
-      if (mode === 'bridge') {
-        bridge.emit('mqtt_subscribe', { topic, options: { qos: 1 } });
-        log('Sub (bridge) ' + topic);
-      } else {
-        client.subscribe(topic, { qos: 1 }); log('Sub ' + topic);
-      }
-    }
-    function pub(topic, payload, retain = false) {
-      if (!connected) return;
-      if (mode === 'bridge') {
-        bridge.emit('mqtt_publish', { topic, payload, options: { qos: 1, retain } });
-        log(`Pub (bridge) ${topic} ${payload}`);
-      } else {
-        const PahoMessage = Paho.Message || (Paho.MQTT && Paho.MQTT.Message); const m = new PahoMessage(payload); m.destinationName = topic; m.qos = 1; m.retained = retain; client.send(m); log(`Pub ${topic} ${payload}`);
-      }
-    }
-
-    function onMsg(msg) {
-      const t = msg.destinationName; const p = msg.payloadString || ''; log('Msg ' + t + ' ' + p);
-      try {
-        const cmdPrefix = `devices/${state.id}/commands/`;
-        if (t.startsWith(cmdPrefix)) {
-          const data = JSON.parse(p || '{}');
-          data.command = t.substring(cmdPrefix.length);
-          handleCmd(data);
-        } else if (state.sessionId) {
-          const sessPrefix = `sessions/${state.sessionId}/commands/`;
-          if (t.startsWith(sessPrefix)) {
-            const data = JSON.parse(p || '{}');
-            data.command = t.substring(sessPrefix.length);
-            handleCmd(data);
+      async function fetchOngoingSessionDetails() {
+        if (!backendBaseUrl) return;
+        try {
+          const url = `${backendBaseUrl}/api/sessions?status=on_going`;
+          const res = await fetch(url);
+          const json = await res.json();
+          const list = Array.isArray(json?.data?.data) ? json.data.data : Array.isArray(json?.data) ? json.data : [];
+          const first = Array.isArray(list) && list.length ? list[0] : null;
+          if (!first) {
+            document.getElementById("journeysList").textContent = "No ongoing session.";
+            return;
           }
-        }
-      } catch (e) { log('Parse error: ' + e.message); }
-    }
-
-    async function fetchOngoingSessionDetails() {
-      if (!backendBaseUrl) return;
-      try {
-        const url = `${backendBaseUrl}/api/sessions?status=on_going`;
-        const res = await fetch(url);
-        const json = await res.json();
-        const list = Array.isArray(json?.data?.data) ? json.data.data : (Array.isArray(json?.data) ? json.data : []);
-        const first = Array.isArray(list) && list.length ? list[0] : null;
-        if (!first) { document.getElementById('journeysList').textContent = 'No ongoing session.'; return; }
-        const sid = String(first.id || '').trim();
-        const stype = String(first.session_type || first?.data?.session_type || '').toLowerCase();
-        state.sessionType = stype;
-        if (sid && !state.sessionId) {
-          state.sessionId = sid; setK('s_session', sid);
-          try { localStorage.setItem('nsc_device_session', sid); } catch {}
-          sub(`sessions/${sid}/commands/+`);
-        }
-        // For individual mode, list ALL journeys from API; for group, use session's journeys
-        if (stype === 'individual') {
-          try {
-            const jr = await fetch(`${backendBaseUrl}/api/journeys?limit=500`);
-            const jjson = await jr.json();
-            const jlist = Array.isArray(jjson?.data?.data) ? jjson.data.data : (Array.isArray(jjson?.data) ? jjson.data : []);
-            state.journeys = jlist || [];
-          } catch (e) {
-            state.journeys = [];
+          const sid = String(first.id || "").trim();
+          const stype = String(first.session_type || first?.data?.session_type || "").toLowerCase();
+          state.sessionType = stype;
+          if (sid && !state.sessionId) {
+            state.sessionId = sid;
+            setK("s_session", sid);
+            try {
+              localStorage.setItem("nsc_device_session", sid);
+            } catch {}
+            sub(`sessions/${sid}/commands/+`);
           }
-        } else {
-          const journeys = Array.isArray(first.journeys) ? first.journeys : (Array.isArray(first.data?.journeys) ? first.data.journeys : []);
-          state.journeys = journeys || [];
-        }
-        renderJourneys();
-        // For group sessions, auto-select a journey if none selected yet; for individual, let user choose
-        if (stype !== 'individual') {
-          let targetJid = state.journeyId;
-          if (!targetJid && (state.journeys || []).length > 0) {
-            const one = state.journeys[0];
-            targetJid = one?.journey?.id != null ? String(one.journey.id) : '';
+          // For individual mode, list ALL journeys from API; for group, use session's journeys
+          if (stype === "individual") {
+            try {
+              const jr = await fetch(`${backendBaseUrl}/api/journeys?limit=500`);
+              const jjson = await jr.json();
+              const jlist = Array.isArray(jjson?.data?.data)
+                ? jjson.data.data
+                : Array.isArray(jjson?.data)
+                ? jjson.data
+                : [];
+              state.journeys = jlist || [];
+            } catch (e) {
+              state.journeys = [];
+            }
+          } else {
+            const journeys = Array.isArray(first.journeys)
+              ? first.journeys
+              : Array.isArray(first.data?.journeys)
+              ? first.data.journeys
+              : [];
+            state.journeys = journeys || [];
           }
-          if (targetJid) selectAndLoadJourney(targetJid);
+          renderJourneys();
+          // For group sessions, auto-select a journey if none selected yet; for individual, let user choose
+          if (stype !== "individual") {
+            let targetJid = state.journeyId;
+            if (!targetJid && (state.journeys || []).length > 0) {
+              const one = state.journeys[0];
+              targetJid = one?.journey?.id != null ? String(one.journey.id) : "";
+            }
+            if (targetJid) selectAndLoadJourney(targetJid);
+          }
+        } catch (e) {
+          log("fetchOngoingSessionDetails error: " + (e?.message || e));
+          document.getElementById("journeysList").textContent = "Failed to load ongoing session.";
         }
-      } catch (e) {
-        log('fetchOngoingSessionDetails error: ' + (e?.message || e));
-        document.getElementById('journeysList').textContent = 'Failed to load ongoing session.';
       }
-    }
 
-    function renderJourneys() {
-      const el = document.getElementById('journeysList');
-      const arr = state.journeys || [];
-      if (!arr.length) {
-        el.innerHTML = `
+      function renderJourneys() {
+        const el = document.getElementById("journeysList");
+        const arr = state.journeys || [];
+        if (!arr.length) {
+          el.innerHTML = `
           <div style="flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; color: #9ca3af;">
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width: 32px; height: 32px; margin-bottom: 8px; opacity: 0.5;">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" />
@@ -829,133 +1055,189 @@
             <div style="font-size: 11px;">No journeys available</div>
           </div>
         `;
-        return;
-      }
-      // Render as grid of cards
-      let html = '<div class="journey-grid">';
-      arr.forEach((j) => {
-        const jid = String(j?.journey?.id || j?.video?.id || '');
-        const title = String(j?.journey?.title || j?.video?.title || 'Untitled');
-        const thumbnail = j?.video?.thumbnail_url || '';
-        const selected = (String(state.journeyId) === jid);
-        const selectedClass = selected ? 'selected' : '';
-        html += `<div class="journey-card ${selectedClass}" onclick="selectAndLoadJourney('${jid}')">`;
-        if (thumbnail) {
-          html += `<img src="${thumbnail}" class="journey-thumbnail" alt="${title}" />`;
-        } else {
-          html += `<div class="journey-thumbnail" style="display:flex;align-items:center;justify-content:center;color:#9ca3af;">📹</div>`;
+          return;
         }
-        html += `<div class="journey-title">${title}</div>`;
-        html += `<div class="journey-id">ID: ${jid}</div>`;
-        html += `</div>`;
-      });
-      html += '</div>';
-      el.innerHTML = html;
-    }
+        // Render as grid of cards
+        let html = '<div class="journey-grid">';
+        arr.forEach((j) => {
+          const jid = String(j?.journey?.id || j?.video?.id || "");
+          const title = String(j?.journey?.title || j?.video?.title || "Untitled");
+          const thumbnail = j?.video?.thumbnail_url || "";
+          const selected = String(state.journeyId) === jid;
+          const selectedClass = selected ? "selected" : "";
+          html += `<div class="journey-card ${selectedClass}" onclick="selectAndLoadJourney('${jid}')">`;
+          if (thumbnail) {
+            html += `<img src="${thumbnail}" class="journey-thumbnail" alt="${title}" />`;
+          } else {
+            html += `<div class="journey-thumbnail" style="display:flex;align-items:center;justify-content:center;color:#9ca3af;">📹</div>`;
+          }
+          html += `<div class="journey-title">${title}</div>`;
+          html += `<div class="journey-id">ID: ${jid}</div>`;
+          html += `</div>`;
+        });
+        html += "</div>";
+        el.innerHTML = html;
+      }
 
-    function selectAndLoadJourney(jid) {
-      state.journeyId = String(jid || '');
-      setK('s_journey', state.journeyId || '-');
-      const arr = state.journeys || [];
-      const found = arr.find((j) => String(j?.journey?.id || '') === String(state.journeyId));
-      const vurl = found?.video?.url || found?.video?.video_url || '';
-      if (player && vurl) {
-        try {
-          player.pause();
-          player.src = vurl;
-          player.load();
-          player.currentTime = 0;
+      function selectAndLoadJourney(jid) {
+        state.journeyId = String(jid || "");
+        setK("s_journey", state.journeyId || "-");
+        const arr = state.journeys || [];
+        const found = arr.find((j) => String(j?.journey?.id || "") === String(state.journeyId));
+        const vurl = found?.video?.url || found?.video?.video_url || "";
+        if (player && vurl) {
+          try {
+            player.pause();
+            player.src = vurl;
+            player.load();
+            player.currentTime = 0;
+            state.positionMs = 0;
+            setK("s_pos", "Position: 0 ms");
+            log("Loaded journey video: " + vurl);
+            // Notify journey selection (useful in individual sessions)
+            sendEvent("select_journey", { journeyId: state.journeyId });
+          } catch (e) {
+            log("Video load error: " + (e?.message || e));
+          }
+        }
+      }
+
+      function handleCmd(data) {
+        const cmd = (data.command || data.type || "").toLowerCase();
+        const cmdJourneyId = data.journeyId != null ? String(data.journeyId) : null;
+
+        // Set flag to prevent event feedback
+        isProcessingCommand = true;
+
+        if (cmd === "start" || cmd === "play") {
+          if (cmdJourneyId && cmdJourneyId !== state.journeyId) {
+            selectAndLoadJourney(cmdJourneyId);
+          }
+          if (typeof data.positionMs === "number") state.positionMs = data.positionMs;
+          if (player && player.src) {
+            try {
+              if (typeof data.positionMs === "number") {
+                player.currentTime = Math.max(0, data.positionMs / 1000);
+                lastSentPosition = data.positionMs;
+              }
+            } catch {}
+            player.play().catch(() => {});
+          }
+          state.playing = true;
+          setK("s_state", "▶ Playing");
+          lastSentEvent = "play";
+        } else if (cmd === "pause") {
+          if (typeof data.positionMs === "number") {
+            state.positionMs = data.positionMs;
+            lastSentPosition = data.positionMs;
+          }
+          if (player && player.src) {
+            try {
+              if (typeof data.positionMs === "number") {
+                player.currentTime = Math.max(0, data.positionMs / 1000);
+              }
+            } catch {}
+            player.pause();
+          }
+          state.playing = false;
+          setK("s_state", "⏸ Paused");
+          lastSentEvent = "pause";
+        } else if (cmd === "seek") {
+          if (typeof data.positionMs === "number") {
+            state.positionMs = data.positionMs;
+            lastSentPosition = data.positionMs;
+          }
+          if (player && player.src) {
+            player.currentTime = Math.max(0, (state.positionMs || 0) / 1000);
+          }
+          setK("s_state", "⏩ Seeking");
+        } else if (cmd === "stop" || cmd === "reset") {
+          state.playing = false;
           state.positionMs = 0;
-          setK('s_pos', 'Position: 0 ms');
-          log('Loaded journey video: ' + vurl);
-          // Notify journey selection (useful in individual sessions)
-          sendEvent('select_journey', { journeyId: state.journeyId });
-        } catch (e) { log('Video load error: ' + (e?.message || e)); }
+          lastSentPosition = 0;
+          if (player && player.src) {
+            player.pause();
+            player.currentTime = 0;
+          }
+          setK("s_state", "State: stopped");
+          lastSentEvent = "stop";
+        } else if (cmd === "calibrate") {
+          setK("s_state", "🔧 Calibrating");
+        } else if (cmd === "join_session") {
+          const sid = String(data.sessionId || data.session_id || "").trim();
+          if (sid) {
+            document.getElementById("sessionInput").value = sid;
+            joinSession();
+          }
+        } else if (cmd === "leave_session") {
+          leaveSession();
+        } else if (cmd === "select_journey") {
+          const jid = (data.journeyId != null ? String(data.journeyId) : "").trim();
+          const lang = (data.language || "").trim();
+          log(`Selecting journey ${jid} with language: ${lang || "default"}`);
+          selectAndLoadJourney(jid);
+          // Note: HTML simulator doesn't have full audio track support
+          // Unity will use the language parameter to select the correct audio track
+        }
+        setK("s_pos", `Position: ${Math.max(0, Math.floor(state.positionMs))} ms`);
+        // Also emit a status update
+        const statusPayload = {
+          deviceId: state.id,
+          type: state.type,
+          status: state.playing ? "active" : "idle",
+          positionMs: Math.floor(state.positionMs),
+          sessionId: state.sessionId || "",
+          timestamp: new Date().toISOString(),
+        };
+        pub(T_status(state.id), JSON.stringify(statusPayload), false);
+        setTimeout(() => {
+          isProcessingCommand = false;
+        }, 100);
+        try {
+          if (bridge && connected) bridge.emit("device:status", statusPayload);
+        } catch {}
       }
-    }
 
-    function handleCmd(data) {
-      const cmd = (data.command || data.type || '').toLowerCase();
-      // Extract journeyId from command if present
-      const cmdJourneyId = data.journeyId != null ? String(data.journeyId) : null;
-      
-      if (cmd === 'start' || cmd === 'play') {
-        // If journeyId specified and different from current, switch journey first
-        if (cmdJourneyId && cmdJourneyId !== state.journeyId) {
-          selectAndLoadJourney(cmdJourneyId);
-        }
-        if (typeof data.positionMs === 'number') state.positionMs = data.positionMs;
-        if (player && player.src) {
-          try { if (typeof data.positionMs === 'number') player.currentTime = Math.max(0, data.positionMs / 1000); } catch {}
-          player.play().catch(() => {});
-        }
-        state.playing = true; setK('s_state', '▶ Playing');
-      } else if (cmd === 'pause') {
-        if (typeof data.positionMs === 'number') state.positionMs = data.positionMs;
-        if (player && player.src) {
-          try { if (typeof data.positionMs === 'number') player.currentTime = Math.max(0, data.positionMs / 1000); } catch {}
-          try { player.pause(); } catch {}
-        }
-        state.playing = false; setK('s_state', '⏸ Paused');
-      } else if (cmd === 'seek') {
-        if (typeof data.positionMs === 'number') state.positionMs = data.positionMs;
-        if (player && player.src) {
-          try { player.currentTime = Math.max(0, (state.positionMs || 0) / 1000); } catch {}
-        }
-        setK('s_state', '⏩ Seeking');
-      } else if (cmd === 'stop' || cmd === 'reset') {
-        state.playing = false; state.positionMs = 0;
-        if (player && player.src) {
-          try { player.pause(); player.currentTime = 0; } catch {}
-        }
-        setK('s_state', 'State: stopped');
-      } else if (cmd === 'calibrate') {
-        setK('s_state', '🔧 Calibrating');
-      } else if (cmd === 'join_session') {
-        const sid = String(data.sessionId || data.session_id || '').trim();
-        if (sid) { document.getElementById('sessionInput').value = sid; joinSession(); }
-      } else if (cmd === 'leave_session') {
-        leaveSession();
-      } else if (cmd === 'select_journey') {
-        const jid = (data.journeyId != null ? String(data.journeyId) : '').trim();
-        const lang = (data.language || '').trim();
-        log(`Selecting journey ${jid} with language: ${lang || 'default'}`);
-        selectAndLoadJourney(jid);
-        // Note: HTML simulator doesn't have full audio track support
-        // Unity will use the language parameter to select the correct audio track
+      function startTicker() {
+        if (ticker) return;
+        state.lastTick = Date.now();
+        ticker = setInterval(() => {
+          const now = Date.now();
+          const dt = now - state.lastTick;
+          state.lastTick = now;
+          if (player && player.src) {
+            // Video clock drives position
+            const ms = (player.currentTime || 0) * 1000;
+            if (!Number.isNaN(ms)) state.positionMs = ms;
+          } else if (state.playing) {
+            state.positionMs += dt;
+          }
+          setK("s_pos", `Position: ${Math.max(0, Math.floor(state.positionMs))} ms`);
+          // Heartbeat roughly every 15s with some jitter
+        }, 1000);
       }
-      setK('s_pos', `Position: ${Math.max(0, Math.floor(state.positionMs))} ms`);
-      // Also emit a status update
-      const statusPayload = { deviceId: state.id, type: state.type, status: state.playing ? 'active' : 'idle', positionMs: Math.floor(state.positionMs), sessionId: state.sessionId || '', timestamp: new Date().toISOString() };
-      pub(T_status(state.id), JSON.stringify(statusPayload), false);
-      try { if (bridge && connected) bridge.emit('device:status', statusPayload); } catch { }
-    }
 
-    function startTicker() {
-      if (ticker) return; state.lastTick = Date.now(); ticker = setInterval(() => {
-        const now = Date.now(); const dt = now - state.lastTick; state.lastTick = now;
-        if (player && player.src) {
-          // Video clock drives position
-          const ms = (player.currentTime || 0) * 1000;
-          if (!Number.isNaN(ms)) state.positionMs = ms;
-        } else if (state.playing) {
-          state.positionMs += dt;
+      // Send heartbeat every 15 seconds (Socket.IO + MQTT)
+      setInterval(() => {
+        if (!connected) return;
+        const hb = {
+          deviceId: state.id,
+          type: state.type,
+          timestamp: new Date().toISOString(),
+          status: state.playing ? "active" : "idle",
+        };
+        try {
+          if (bridge) bridge.emit("device:heartbeat", hb);
+        } catch {}
+        pub(T_heartbeat(state.id), JSON.stringify(hb), false);
+      }, 15000);
+
+      function stopTicker() {
+        if (ticker) {
+          clearInterval(ticker);
+          ticker = null;
         }
-        setK('s_pos', `Position: ${Math.max(0, Math.floor(state.positionMs))} ms`);
-        // Heartbeat roughly every 15s with some jitter
-      }, 1000);
-    }
-
-    // Send heartbeat every 15 seconds (Socket.IO + MQTT)
-    setInterval(() => {
-      if (!connected) return;
-      const hb = { deviceId: state.id, type: state.type, timestamp: new Date().toISOString(), status: state.playing ? 'active' : 'idle' };
-      try { if (bridge) bridge.emit('device:heartbeat', hb); } catch { }
-      pub(T_heartbeat(state.id), JSON.stringify(hb), false);
-    }, 15000);
-
-    function stopTicker() { if (ticker) { clearInterval(ticker); ticker = null; } }
-  </script>
-</body>
-
+      }
+    </script>
+  </body>
 </html>

@@ -2,7 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { realtime } from "@/lib/realtime";
 import api from "@/lib/axios";
 import type { JourneyItem } from "@/types/journey";
-import { createGroupSession, createIndividualSession, commandSession, addParticipant, getSessionById, type SessionType } from "@/lib/sessions";
+import {
+  createGroupSession,
+  createIndividualSession,
+  commandSession,
+  addParticipant,
+  getSessionById,
+  type SessionType,
+} from "@/lib/sessions";
 import ProgressStepper from "./components/ProgressStepper";
 import SessionTypeStep from "./components/steps/SessionTypeStep";
 import JourneySelectionStep from "./components/steps/JourneySelectionStep";
@@ -24,6 +31,7 @@ type Device = {
   lastEvent?: string;
   lastEventTimestamp?: string;
   language?: string;
+  playing?: boolean;
 };
 
 type Pair = {
@@ -60,9 +68,12 @@ interface SessionsEnvelope {
 export default function DeviceControlPanel() {
   // Connection form state
   // Use explicit backend URL for bridge (Socket.IO). Default to localhost:8001 during dev.
-  const backendUrl = (import.meta.env.VITE_BACKEND_URL as string)
-    || (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:8001` : 'http://localhost:8001');
-  const mqttWsUrl = (import.meta.env.VITE_MQTT_WS_URL as string) || 'ws://localhost:9001';
+  const backendUrl =
+    (import.meta.env.VITE_BACKEND_URL as string) ||
+    (typeof window !== "undefined"
+      ? `${window.location.protocol}//${window.location.hostname}:8001`
+      : "http://localhost:8001");
+  const mqttWsUrl = (import.meta.env.VITE_MQTT_WS_URL as string) || "ws://localhost:9001";
   const [forceBridge] = useState<boolean>(true);
   const [mqttUrl] = useState<string>(forceBridge ? backendUrl : mqttWsUrl);
   const [clientId] = useState<string>(`admin-${Math.random().toString(36).slice(2, 8).toUpperCase()}`);
@@ -80,6 +91,7 @@ export default function DeviceControlPanel() {
   // Devices & pairs
   const [devicesMap, setDevicesMap] = useState<Map<string, Device>>(new Map());
   const devicesList = useMemo(() => Array.from(devicesMap.values()), [devicesMap]);
+
   const [pairs, setPairs] = useState<Pair[]>([]);
   const vrDevices = useMemo(() => devicesList.filter((d) => d.type === "vr" && d.online), [devicesList]);
   const chairDevices = useMemo(() => devicesList.filter((d) => d.type === "chair" && d.online), [devicesList]);
@@ -95,7 +107,9 @@ export default function DeviceControlPanel() {
   // Allow controller to remain visible even when all pairs are unpaired.
   // We pass a fallback activePair with only the sessionId so Stop/commands can still address the session.
   const activePairForController = useMemo(
-    () => activePair || (activeSessionId ? { sessionId: activeSessionId, vrId: "", chairId: "", journeyId: [] as number[] } : null),
+    () =>
+      activePair ||
+      (activeSessionId ? { sessionId: activeSessionId, vrId: "", chairId: "", journeyId: [] as number[] } : null),
     [activePair, activeSessionId],
   );
   const [seekValues, setSeekValues] = useState<Record<string, number>>({});
@@ -139,8 +153,8 @@ export default function DeviceControlPanel() {
         const res = await api.get<SessionsEnvelope | { data?: SessionRec[] }>("sessions", { status: "on_going" });
         const root = res?.data as SessionsEnvelope | { data?: SessionRec[] } | undefined;
         const list: SessionRec[] = Array.isArray((root as { data?: SessionRec[] })?.data)
-          ? ((root as { data?: SessionRec[] }).data || [])
-          : ((root as SessionsEnvelope)?.data?.data || []);
+          ? (root as { data?: SessionRec[] }).data || []
+          : (root as SessionsEnvelope)?.data?.data || [];
         if (Array.isArray(list) && list.length > 0) {
           const s: SessionRec = list[0]!;
           const sid: string = s.id;
@@ -151,7 +165,9 @@ export default function DeviceControlPanel() {
             try {
               const det = await getSessionById(sid);
               jids = Array.isArray(det?.data?.journey_ids) ? (det!.data!.journey_ids as number[]) : jids;
-              participants = Array.isArray(det?.data?.participants) ? (det!.data!.participants as ParticipantRec[]) : [];
+              participants = Array.isArray(det?.data?.participants)
+                ? (det!.data!.participants as ParticipantRec[])
+                : [];
             } catch (e) {
               const message = e instanceof Error ? e.message : String(e);
               log(`Fallback session details load failed: ${message}`);
@@ -159,56 +175,92 @@ export default function DeviceControlPanel() {
           }
           const seededPairs = (participants || [])
             .filter((m) => m.vr_device_id && m.chair_device_id)
-            .map((m) => ({ sessionId: sid, vrId: String(m.vr_device_id), chairId: String(m.chair_device_id), journeyId: jids }));
-          // Always set active session and go to controller, even if there are zero seeded pairs
+            .map((m) => ({
+              sessionId: sid,
+              vrId: String(m.vr_device_id),
+              chairId: String(m.chair_device_id),
+              journeyId: jids,
+            }));
+          // Set session context
           setPairs(seededPairs);
-          setActiveSessionId(sid);
           setSelectedJourneyIds(jids.map((x) => String(x)));
           setSessionType((s.session_type as SessionType) || null);
-          // Only enter controller if session is not completed/stopped
+          // Only enter controller if session is not completed/stopped AND we have at least one paired device
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const overall = (s as any)?.overall_status as string | undefined;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const status = (s as any)?.status as string | undefined;
-          if (overall !== 'completed' && status !== 'stopped') {
+          if (overall !== "completed" && status !== "stopped" && seededPairs.length > 0) {
+            setActiveSessionId(sid);
             void loadJourneys();
             setCurrentStep("controller");
-            try { localStorage.setItem('nsc_active_session_id', sid); } catch {}
+            try {
+              localStorage.setItem("nsc_active_session_id", sid);
+            } catch (e) {
+              const message = e instanceof Error ? e.message : String(e);
+              log(`Failed to set active session ID: ${message}`);
+            }
           } else {
-            try { localStorage.removeItem('nsc_active_session_id'); } catch {}
+            try {
+              localStorage.removeItem("nsc_active_session_id");
+            } catch (e) {
+              const message = e instanceof Error ? e.message : String(e);
+              log(`Failed to remove active session ID: ${message}`);
+            }
             setActiveSessionId("");
-            setCurrentStep('session-type');
+            setCurrentStep("session-type");
           }
         } else {
           // Fallback: restore last active session by ID if present
           try {
-            const storedId = localStorage.getItem('nsc_active_session_id');
+            const storedId = localStorage.getItem("nsc_active_session_id");
             if (storedId) {
               const det = await getSessionById(storedId);
               const sid = det?.data?.id as string;
               if (sid) {
                 const jids = Array.isArray(det?.data?.journey_ids) ? (det!.data!.journey_ids as number[]) : [];
-                const participants = Array.isArray(det?.data?.participants) ? (det!.data!.participants as ParticipantRec[]) : [];
+                const participants = Array.isArray(det?.data?.participants)
+                  ? (det!.data!.participants as ParticipantRec[])
+                  : [];
                 const seededPairs = (participants || [])
                   .filter((m) => m.vr_device_id && m.chair_device_id)
-                  .map((m) => ({ sessionId: sid, vrId: String(m.vr_device_id), chairId: String(m.chair_device_id), journeyId: jids }));
+                  .map((m) => ({
+                    sessionId: sid,
+                    vrId: String(m.vr_device_id),
+                    chairId: String(m.chair_device_id),
+                    journeyId: jids,
+                  }));
                 setPairs(seededPairs);
-                setActiveSessionId(sid);
                 setSelectedJourneyIds(jids.map((x) => String(x)));
                 setSessionType((det?.data?.session_type as SessionType) || null);
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 const overall = (det as any)?.data?.overall_status as string | undefined;
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 const status = (det as any)?.data?.status as string | undefined;
-                if (overall !== 'completed' && status !== 'stopped') {
+                if (overall !== "completed" && status !== "stopped" && seededPairs.length > 0) {
+                  setActiveSessionId(sid);
                   void loadJourneys();
-                  setCurrentStep('controller');
+                  setCurrentStep("controller");
                 } else {
-                  try { localStorage.removeItem('nsc_active_session_id'); } catch {}
+                  try {
+                    localStorage.removeItem("nsc_active_session_id");
+                  } catch (e) {
+                    const message = e instanceof Error ? e.message : String(e);
+                    log(`Failed to remove active session ID: ${message}`);
+                  }
                   setActiveSessionId("");
-                  setCurrentStep('session-type');
+                  setCurrentStep("session-type");
                 }
               }
             }
-          } catch {}
+          } catch (e) {
+            const message = e instanceof Error ? e.message : String(e);
+            log(`Failed to load ongoing session: ${message}`);
+          }
         }
-      } catch {
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        log(`Failed to load ongoing session: ${message}`);
         // ignore fetch errors; remain in flow
       }
     };
@@ -220,7 +272,6 @@ export default function DeviceControlPanel() {
       logBoxRef.current.scrollTop = logBoxRef.current.scrollHeight;
     }
   }, [logs]);
-
 
   const renderDevices = useCallback((updater: (prev: Map<string, Device>) => Map<string, Device>) => {
     setDevicesMap((prev) => {
@@ -241,6 +292,11 @@ export default function DeviceControlPanel() {
   const publishTopic = useCallback(
     (topic: string, payload: string, retain = false) => {
       if (!connected) return;
+      // Console label for outbound admin-originated publishes
+      try { console.log(`[ADMIN→DEVICE ${realtime.currentMode}]`, topic, payload); } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        log(`Failed to publish topic: ${message}`);
+      }
       realtime.publish(topic, payload, retain, 1);
       log(`${realtime.currentMode === "bridge" ? "Pub (bridge)" : "Pub"} ${topic} ${payload}`);
     },
@@ -283,6 +339,11 @@ export default function DeviceControlPanel() {
     (msg: { destinationName: string; payloadString?: string }) => {
       const t = msg.destinationName;
       const p = msg.payloadString || "";
+      // Console label for inbound device-originated MQTT messages
+      try { console.log("[DEVICE→ADMIN MQTT]", t, p); } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        log(`Failed to log message: ${message}`);
+      }
       try {
         if (t === "devices/discovery/announce") {
           const d = JSON.parse(p || "{}");
@@ -306,7 +367,17 @@ export default function DeviceControlPanel() {
           const data = JSON.parse(p || "{}");
           renderDevices((map) => {
             const cur: Device = map.get(id) || { id, type: "unknown", name: id, online: false };
-            const status = String((data && data.status) || "").toLowerCase();
+            const rawStatus = String((data && data.status) || "").toLowerCase();
+            // Normalize status variants
+            const status =
+              rawStatus === "playing"
+                ? "active"
+                : rawStatus === "paused" ||
+                  rawStatus === "stopped" ||
+                  rawStatus === "disconnect" ||
+                  rawStatus === "disconnected"
+                ? "idle"
+                : rawStatus;
             cur.online = ["active", "idle", "online", "connecting"].includes(status);
             cur.status = status || cur.status;
             // Update device type from status payload if provided
@@ -329,6 +400,7 @@ export default function DeviceControlPanel() {
           const id = t.split("/")[1];
           renderDevices((map) => {
             const cur: Device = map.get(id) || { id, type: "unknown", name: id, online: false };
+            cur.online = true;
             cur.lastSeen = Date.now();
             map.set(id, cur);
             return map;
@@ -336,16 +408,28 @@ export default function DeviceControlPanel() {
         } else if (t.startsWith("devices/") && t.endsWith("/events")) {
           const id = t.split("/")[1];
           const data = JSON.parse(p || "{}");
-          const event = String(data?.event || "");
+          const event = String(data?.event || "").toLowerCase();
           renderDevices((map) => {
             const cur: Device = map.get(id) || { id, type: "unknown", name: id, online: false };
+            // Events imply device is alive
+            cur.online = true;
+            // Update device type from event payload if available; otherwise infer from id
+            const reportedType = String((data && data.type) || "").toLowerCase();
+            if (reportedType === "vr" || reportedType === "chair") {
+              cur.type = reportedType as DeviceType;
+            } else if (cur.type === "unknown") {
+              if (/^vr[_-]?/i.test(id)) cur.type = "vr";
+              else if (/^chair[_-]?/i.test(id)) cur.type = "chair";
+            }
             if (event === "select_journey" && data?.journeyId != null) {
               cur.currentJourneyId = Number(data.journeyId);
             }
-            if (event === "play") {
+            if (event === "play" || event === "playing" || event === "resume") {
               cur.status = "active";
-            } else if (event === "pause" || event === "stop") {
+              cur.playing = true;
+            } else if (event === "pause" || event === "paused" || event === "stop" || event === "stopped") {
               cur.status = "idle";
+              cur.playing = false;
             }
             if (typeof data?.positionMs === "number") cur.positionMs = Number(data.positionMs);
             if (typeof data?.sessionId === "string") cur.sessionId = String(data.sessionId);
@@ -387,6 +471,10 @@ export default function DeviceControlPanel() {
         realtime.emitBridge("devices:get");
         offs.push(
           realtime.onBridge("devices:snapshot", (payload: unknown) => {
+            try { console.log("[DEVICE→ADMIN BRIDGE]","devices:snapshot", payload); } catch (e) {
+              const message = e instanceof Error ? e.message : String(e);
+              log(`Failed to log message: ${message}`);
+            }
             try {
               if (Array.isArray(payload)) {
                 renderDevices((map) => {
@@ -412,6 +500,10 @@ export default function DeviceControlPanel() {
         );
         offs.push(
           realtime.onBridge("device:discovered", (d: unknown) => {
+            try { console.log("[DEVICE→ADMIN BRIDGE]","device:discovered", d); } catch (e) {
+              const message = e instanceof Error ? e.message : String(e);
+              log(`Failed to log message: ${message}`);
+            }
             const data = d as { deviceId?: string; type?: DeviceType; name?: string };
             if (!data?.deviceId) return;
             renderDevices((map) => {
@@ -432,6 +524,10 @@ export default function DeviceControlPanel() {
         );
         offs.push(
           realtime.onBridge("device:heartbeat", (h: unknown) => {
+            try { console.log("[DEVICE→ADMIN BRIDGE]","device:heartbeat", h); } catch (e) {
+              const message = e instanceof Error ? e.message : String(e);
+              log(`Failed to log message: ${message}`);
+            }
             const id = (h as { deviceId?: string })?.deviceId;
             if (!id) return;
             renderDevices((map) => {
@@ -445,6 +541,10 @@ export default function DeviceControlPanel() {
         );
         offs.push(
           realtime.onBridge("device:status", (s: unknown) => {
+            try { console.log("[DEVICE→ADMIN BRIDGE]","device:status", s); } catch (e) {
+              const message = e instanceof Error ? e.message : String(e);
+              log(`Failed to log message: ${message}`);
+            }
             const id = (s as { deviceId?: string })?.deviceId;
             if (!id) return;
             renderDevices((map) => {
@@ -458,6 +558,10 @@ export default function DeviceControlPanel() {
         );
         offs.push(
           realtime.onBridge("device:offline", (d: unknown) => {
+            try { console.log("[DEVICE→ADMIN BRIDGE]","device:offline", d); } catch (e) {
+              const message = e instanceof Error ? e.message : String(e);
+              log(`Failed to log message: ${message}`);
+            }
             const id = (d as { deviceId?: string; type?: DeviceType })?.deviceId;
             if (!id) return;
             renderDevices((map) => {
@@ -468,6 +572,8 @@ export default function DeviceControlPanel() {
                 online: false,
               };
               cur.online = false;
+              // Ensure UI treats playback as paused when device goes offline
+              cur.status = "idle";
               map.set(id, cur);
               return map;
             });
@@ -507,8 +613,6 @@ export default function DeviceControlPanel() {
       setConnected(false);
     };
   }, []);
-
-  
 
   const sendCmd = useCallback(
     (sessionId: string, type: "play" | "pause" | "seek" | "stop", positionMs?: number, journeyId?: number) => {
@@ -591,9 +695,17 @@ export default function DeviceControlPanel() {
       // Ensure journeys are loaded for Individual mode (chips list uses all journeys)
       void loadJourneys();
       log(`Individual session created: ${sid} with ${pairs.length} pair(s)`);
-      try { localStorage.setItem('nsc_active_session_id', sid); } catch {}
+      try {
+        localStorage.setItem("nsc_active_session_id", sid);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        log(`Failed to set active session ID: ${message}`);
+      }
       // Instruct all paired devices to join this session
-      broadcastSessionJoin(sid, pairs.map((p) => ({ ...p, sessionId: sid })));
+      broadcastSessionJoin(
+        sid,
+        pairs.map((p) => ({ ...p, sessionId: sid })),
+      );
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       log(`Create session failed: ${message}`);
@@ -603,7 +715,7 @@ export default function DeviceControlPanel() {
   const handleCreateGroup = useCallback(async () => {
     try {
       if (pairs.length === 0 || !selectedJourneyIds) return;
-      
+
       // Choose a default language to start with for the group:
       // if multiple journeys selected, prefer the first selected journey's chosen language; fallback to first track's language
       let defaultLang: string | null = null;
@@ -611,11 +723,15 @@ export default function DeviceControlPanel() {
       if (firstJid && selectedJourneyLangs[firstJid!]) {
         defaultLang = selectedJourneyLangs[firstJid!];
       } else {
-        const j = journeys.find((x) => String(x.journey?.id ?? x.video?.id ?? '') === String(firstJid ?? ''));
+        const j = journeys.find((x) => String(x.journey?.id ?? x.video?.id ?? "") === String(firstJid ?? ""));
         const langCode = j?.audio_tracks?.[0]?.language_code;
-        defaultLang = typeof langCode === 'string' ? langCode : null;
+        defaultLang = typeof langCode === "string" ? langCode : null;
       }
-      const payloadMembers = pairs.map((p) => ({ vrDeviceId: p.vrId, chairDeviceId: p.chairId, language: defaultLang || undefined }));
+      const payloadMembers = pairs.map((p) => ({
+        vrDeviceId: p.vrId,
+        chairDeviceId: p.chairId,
+        language: defaultLang || undefined,
+      }));
       const res = await createGroupSession({
         session_type: "group",
         members: payloadMembers,
@@ -654,9 +770,28 @@ export default function DeviceControlPanel() {
   }, [devicesList]);
 
   const deviceInfoById = useMemo(() => {
-    const map: Record<string, { status?: string; positionMs?: number; sessionId?: string; currentJourneyId?: number; lastEvent?: string; language?: string }> = {};
+    const map: Record<
+      string,
+      {
+        status?: string;
+        positionMs?: number;
+        sessionId?: string;
+        currentJourneyId?: number;
+        lastEvent?: string;
+        language?: string;
+        playing?: boolean;
+      }
+    > = {};
     for (const d of devicesList) {
-      map[d.id] = { status: d.status, positionMs: d.positionMs, sessionId: d.sessionId, currentJourneyId: d.currentJourneyId, lastEvent: d.lastEvent, language: d.language };
+      map[d.id] = {
+        status: d.status,
+        positionMs: d.positionMs,
+        sessionId: d.sessionId,
+        currentJourneyId: d.currentJourneyId,
+        lastEvent: d.lastEvent,
+        language: d.language,
+        playing: d.playing,
+      };
     }
     return map;
   }, [devicesList]);
@@ -720,9 +855,13 @@ export default function DeviceControlPanel() {
               onBack={() => setCurrentStep("device-selection")}
               sessionType={sessionType}
               selectedJourneyIds={selectedJourneyIds}
-              setSelectedJourneyIds={(updater: (prev: string[]) => string[]) => setSelectedJourneyIds((prev) => updater(prev))}
+              setSelectedJourneyIds={(updater: (prev: string[]) => string[]) =>
+                setSelectedJourneyIds((prev) => updater(prev))
+              }
               selectedJourneyLangs={selectedJourneyLangs}
-              setSelectedJourneyLangs={(updater: (prev: Record<string, string>) => Record<string, string>) => setSelectedJourneyLangs((prev) => updater(prev))}
+              setSelectedJourneyLangs={(updater: (prev: Record<string, string>) => Record<string, string>) =>
+                setSelectedJourneyLangs((prev) => updater(prev))
+              }
               onCreateIndividual={() => void handleCreateIndividual()}
               onCreateGroup={() => void handleCreateGroup()}
             />

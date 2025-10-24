@@ -218,6 +218,19 @@ const VideoPlayerInner: React.ForwardRefRenderFunction<VideoPlayerHandle, VideoP
           className="absolute inset-0 h-full w-full object-contain"
           onTimeUpdate={onTimeUpdate}
           onLoadedMetadata={onLoadedMetadata}
+          onEnded={() => {
+            const el = videoRef.current;
+            if (!el) return;
+            // Ensure UI reflects ended state
+            setPlaying(false);
+            const dur = el.duration || 0;
+            setProgress(100);
+            onTimeUpdateRes?.(100);
+            onDurationMs?.(dur * 1000);
+            onTimeUpdateMs?.(dur * 1000);
+            // Notify parent that playback is no longer active
+            ontogglePlay?.(false);
+          }}
           controls={false}
         />
         {/* Controls overlay */}
