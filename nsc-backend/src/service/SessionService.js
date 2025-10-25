@@ -256,7 +256,7 @@ class SessionService {
   async listSessions({ page = 1, limit = 20, status = 'on_going' }) {
     const offset = (Number(page) - 1) * Number(limit);
     const where = {};
-    const BASE_URL = process.env.BASE_URL || 'http://localhost:8001';
+    const BASE_URL = process.env.BASE_URL;
 
     if (status) {
       where.overall_status = status;
@@ -441,7 +441,7 @@ class SessionService {
       };
     }
 
-    const BASE_URL = process.env.BASE_URL || 'http://localhost:8001';
+    const BASE_URL = process.env.BASE_URL;
     const plain = typeof session.toJSON === 'function' ? session.toJSON() : session;
     const journeyIds = Array.isArray(plain.journey_ids) ? plain.journey_ids : [];
 
