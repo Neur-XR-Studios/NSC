@@ -65,7 +65,7 @@ export const EditAssetModal: React.FC<EditAssetModalProps> = ({ open, onClose, o
   const [videoPreviewUrl, setVideoPreviewUrl] = React.useState<string | null>(null)
   const [telemetryPreviewUrl, setTelemetryPreviewUrl] = React.useState<string | null>(null)
   const [audioFields, setAudioFields] = React.useState<AudioField[]>([
-    { id: crypto.randomUUID(), language_code: 'en', file: null },
+    { id: Math.random().toString(), language_code: 'en', file: null },
   ])
   const [submitting, setSubmitting] = React.useState(false)
 
@@ -90,9 +90,9 @@ export const EditAssetModal: React.FC<EditAssetModalProps> = ({ open, onClose, o
     })
     // seed audio language rows from existing tracks
     if (item?.audio_tracks?.length) {
-      setAudioFields(item.audio_tracks.map((t) => ({ id: crypto.randomUUID(), language_code: t.language_code || '', file: null, originalUrl: t.url || undefined })))
+      setAudioFields(item.audio_tracks.map((t) => ({ id: Math.random().toString(), language_code: t.language_code || '', file: null, originalUrl: t.url || undefined })))
     } else {
-      setAudioFields([{ id: crypto.randomUUID(), language_code: 'en', file: null }])
+      setAudioFields([{ id: Math.random().toString(), language_code: 'en', file: null }])
     }
     setSubmitting(false)
   }, [open, reset, item])
@@ -106,7 +106,7 @@ export const EditAssetModal: React.FC<EditAssetModalProps> = ({ open, onClose, o
 
   const addAudioField = () =>
     setAudioFields((p) => {
-      const next = [...p, { id: crypto.randomUUID(), language_code: '', file: null }]
+      const next = [...p, { id: Math.random().toString(), language_code: '', file: null }]
       const formAudios: FormValues['audios'] = next
         .filter((x) => x.file)
         .map((x) => ({ language_code: x.language_code, file: x.file as File }))

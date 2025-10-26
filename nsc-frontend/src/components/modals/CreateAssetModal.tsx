@@ -59,7 +59,7 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({ open, onClos
     const [videoPreviewUrl, setVideoPreviewUrl] = React.useState<string | null>(null)
     const [telemetryPreviewUrl, setTelemetryPreviewUrl] = React.useState<string | null>(null)
     const [audioFields, setAudioFields] = React.useState<AudioField[]>([
-        { id: crypto.randomUUID(), language_code: 'en', file: null },
+        { id: Math.random().toString(), language_code: 'en', file: null },
     ])
     const [submitting, setSubmitting] = React.useState(false)
 
@@ -82,7 +82,7 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({ open, onClos
         })
         setAudioFields((prev) => {
             prev.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl))
-            return [{ id: crypto.randomUUID(), language_code: 'en', file: null }]
+            return [{ id: Math.random().toString(), language_code: 'en', file: null }]
         })
         setSubmitting(false)
     }, [open, reset])
@@ -103,7 +103,7 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({ open, onClos
 
     const addAudioField = () =>
         setAudioFields((p) => {
-            const next = [...p, { id: crypto.randomUUID(), language_code: '', file: null }]
+            const next = [...p, { id: Math.random().toString(), language_code: '', file: null }]
             // sync to form (only selected files count)
             const formAudios: FormValues['audios'] = next
                 .filter((x) => x.file)
