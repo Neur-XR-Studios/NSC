@@ -21,6 +21,12 @@ const io = require('socket.io')(server, {
 global.io = io;
 require('./config/rootSocket')(io);
 
+if (!process.env.BASE_URL) {
+    const host = process.env.PUBLIC_HOST || 'localhost';
+    const port = process.env.BACKEND_PORT || process.env.PORT || 5000;
+    process.env.BASE_URL = `http://${host}:${port}`;
+}
+
 // Initialize MQTT connection
 mqttService.connect();
 // Proactively request device announcements shortly after startup

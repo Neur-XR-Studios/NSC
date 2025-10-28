@@ -43,6 +43,7 @@ services:
       DB_HOST: mysql
       MQTT_URL: ${MQTT_URL:-mqtt://mqtt-broker:1883}
       MQTT_CLIENT_ID_PREFIX: nsc-backend
+      BASE_URL: http://${PUBLIC_HOST:-localhost}:${BACKEND_PORT:-8001}
     depends_on:
       mysql:
         condition: service_healthy
@@ -59,9 +60,9 @@ services:
     build:
       context: ./nsc-frontend
       args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL}
-        VITE_API_URL: ${VITE_API_URL}
-        VITE_MQTT_WS_URL: ${VITE_MQTT_WS_URL}
+        VITE_API_BASE_URL: http://${PUBLIC_HOST:-localhost}:${BACKEND_PORT:-8001}
+        VITE_API_URL: http://${PUBLIC_HOST:-localhost}:${BACKEND_PORT:-8001}/api
+        VITE_MQTT_WS_URL: ws://${PUBLIC_HOST:-localhost}:9001
     container_name: nsc-frontend
     depends_on:
       - backend

@@ -169,6 +169,21 @@ class JourneyController {
     }
   };
 
+  languages = async (req, res) => {
+    try {
+      const result = await this.service.getById(req.params.id);
+      if (!result || !result.response || !result.response.status) {
+        return res.status(result?.statusCode || httpStatus.NOT_FOUND).send(result?.response || { status: false, message: 'Journey not found' });
+      }
+      const data = result.response.data;
+      const languages = Array.isArray(data?.audio_languages) ? data.audio_languages : [];
+      return res.status(httpStatus.OK).send({ status: true, data: { journey_id: data?.journey?.id || req.params.id, languages } });
+    } catch (e) {
+      logger.error(e);
+      return res.status(httpStatus.BAD_GATEWAY).send(e);
+    }
+  };
+
   // GET /api/journeys/vr - simplified payload for VR clients
   listForVr = async (req, res) => {
     try {

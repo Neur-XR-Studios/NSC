@@ -20,6 +20,9 @@ router.get('/vr/list', controller.listForVr);
 // Get Journey by ID
 router.get('/:id', auth(['admin']), controller.get);
 
+// Get languages for Journey by ID
+router.get('/:id/languages', controller.languages);
+
 // Update Journey (link/unlink IDs only)
 router.patch('/:id', auth(['admin']), validator.updateValidator, controller.update);
 
