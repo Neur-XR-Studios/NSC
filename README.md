@@ -49,9 +49,9 @@ docker compose --env-file .env.docker up -d --build
 ```
 
 4. Access the app
-- Frontend: http://localhost:${FRONTEND_PORT:-8002}
-- Backend API: http://localhost:${BACKEND_PORT:-8001}
-- MQTT WS: ws://localhost:9001
+- Frontend: http://your-ip:${FRONTEND_PORT:-8002}
+- Backend API: http://your-ip:${BACKEND_PORT:-8001}
+- MQTT WS: ws://your-ip:9001
 
 ## Common commands
 - Rebuild only frontend and restart:
