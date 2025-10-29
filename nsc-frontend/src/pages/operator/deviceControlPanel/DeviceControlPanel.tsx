@@ -293,10 +293,10 @@ export default function DeviceControlPanel() {
     (topic: string, payload: string, retain = false) => {
       if (!connected) return;
       // Console label for outbound admin-originated publishes
-      try { console.log(`[ADMIN→DEVICE ${realtime.currentMode}]`, topic, payload); } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        log(`Failed to publish topic: ${message}`);
-      }
+      // try { console.log(`[ADMIN→DEVICE ${realtime.currentMode}]`, topic, payload); } catch (e) {
+      //   const message = e instanceof Error ? e.message : String(e);
+      //   log(`Failed to publish topic: ${message}`);
+      // }
       realtime.publish(topic, payload, retain, 1);
       log(`${realtime.currentMode === "bridge" ? "Pub (bridge)" : "Pub"} ${topic} ${payload}`);
     },
@@ -340,10 +340,10 @@ export default function DeviceControlPanel() {
       const t = msg.destinationName;
       const p = msg.payloadString || "";
       // Console label for inbound device-originated MQTT messages
-      try { console.log("[DEVICE→ADMIN MQTT]", t, p); } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        log(`Failed to log message: ${message}`);
-      }
+      // try { console.log("[DEVICE→ADMIN MQTT]", t, p); } catch (e) {
+      //   const message = e instanceof Error ? e.message : String(e);
+      //   log(`Failed to log message: ${message}`);
+      // }
       try {
         if (t === "devices/discovery/announce") {
           const d = JSON.parse(p || "{}");
@@ -471,10 +471,10 @@ export default function DeviceControlPanel() {
         realtime.emitBridge("devices:get");
         offs.push(
           realtime.onBridge("devices:snapshot", (payload: unknown) => {
-            try { console.log("[DEVICE→ADMIN BRIDGE]","devices:snapshot", payload); } catch (e) {
-              const message = e instanceof Error ? e.message : String(e);
-              log(`Failed to log message: ${message}`);
-            }
+            // try { console.log("[DEVICE→ADMIN BRIDGE]","devices:snapshot", payload); } catch (e) {
+            //   const message = e instanceof Error ? e.message : String(e);
+            //   log(`Failed to log message: ${message}`);
+            // }
             try {
               if (Array.isArray(payload)) {
                 renderDevices((map) => {
@@ -500,10 +500,10 @@ export default function DeviceControlPanel() {
         );
         offs.push(
           realtime.onBridge("device:discovered", (d: unknown) => {
-            try { console.log("[DEVICE→ADMIN BRIDGE]","device:discovered", d); } catch (e) {
-              const message = e instanceof Error ? e.message : String(e);
-              log(`Failed to log message: ${message}`);
-            }
+            // try { console.log("[DEVICE→ADMIN BRIDGE]","device:discovered", d); } catch (e) {
+            //   const message = e instanceof Error ? e.message : String(e);
+            //   log(`Failed to log message: ${message}`);
+            // }
             const data = d as { deviceId?: string; type?: DeviceType; name?: string };
             if (!data?.deviceId) return;
             renderDevices((map) => {
@@ -524,10 +524,6 @@ export default function DeviceControlPanel() {
         );
         offs.push(
           realtime.onBridge("device:heartbeat", (h: unknown) => {
-            try { console.log("[DEVICE→ADMIN BRIDGE]","device:heartbeat", h); } catch (e) {
-              const message = e instanceof Error ? e.message : String(e);
-              log(`Failed to log message: ${message}`);
-            }
             const id = (h as { deviceId?: string })?.deviceId;
             if (!id) return;
             renderDevices((map) => {
@@ -541,10 +537,10 @@ export default function DeviceControlPanel() {
         );
         offs.push(
           realtime.onBridge("device:status", (s: unknown) => {
-            try { console.log("[DEVICE→ADMIN BRIDGE]","device:status", s); } catch (e) {
-              const message = e instanceof Error ? e.message : String(e);
-              log(`Failed to log message: ${message}`);
-            }
+            // try { console.log("[DEVICE→ADMIN BRIDGE]","device:status", s); } catch (e) {
+            //   const message = e instanceof Error ? e.message : String(e);
+            //   log(`Failed to log message: ${message}`);
+            // }
             const id = (s as { deviceId?: string })?.deviceId;
             if (!id) return;
             renderDevices((map) => {
@@ -558,10 +554,10 @@ export default function DeviceControlPanel() {
         );
         offs.push(
           realtime.onBridge("device:offline", (d: unknown) => {
-            try { console.log("[DEVICE→ADMIN BRIDGE]","device:offline", d); } catch (e) {
-              const message = e instanceof Error ? e.message : String(e);
-              log(`Failed to log message: ${message}`);
-            }
+            // try { console.log("[DEVICE→ADMIN BRIDGE]","device:offline", d); } catch (e) {
+            //   const message = e instanceof Error ? e.message : String(e);
+            //   log(`Failed to log message: ${message}`);
+            // }
             const id = (d as { deviceId?: string; type?: DeviceType })?.deviceId;
             if (!id) return;
             renderDevices((map) => {
