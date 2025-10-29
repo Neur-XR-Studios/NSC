@@ -54,8 +54,8 @@ export default function GroupSessionController({
       (Array.isArray(activePair?.journeyId)
         ? activePair?.journeyId
         : activePair?.journeyId
-        ? [activePair?.journeyId]
-        : []) as number[],
+          ? [activePair?.journeyId]
+          : []) as number[],
     [activePair?.journeyId],
   );
 
@@ -182,8 +182,8 @@ export default function GroupSessionController({
         Array.isArray(activePair?.journeyId)
           ? activePair?.journeyId
           : activePair?.journeyId
-          ? [activePair?.journeyId]
-          : []
+            ? [activePair?.journeyId]
+            : []
       ) as number[];
       sessionPairs.forEach((sp) => {
         const key = `${sp.vrId}-${sp.chairId}`;
@@ -336,6 +336,10 @@ export default function GroupSessionController({
                             });
                             const currentJourney = journeyCards[currentJourneyIdx];
                             sendCmd(activePair.sessionId, "seek", val, currentJourney?.jid);
+                            if (isSessionPlaying) {
+                              sendCmd(activePair.sessionId, "play", val, currentJourney?.jid);
+                              setIsSessionPlaying(true);
+                            }
                           }
                           pausedOnDragRef.current = false;
                         }}
@@ -349,6 +353,10 @@ export default function GroupSessionController({
                             });
                             const currentJourney = journeyCards[currentJourneyIdx];
                             sendCmd(activePair.sessionId, "seek", val, currentJourney?.jid);
+                            if (isSessionPlaying) {
+                              sendCmd(activePair.sessionId, "play", val, currentJourney?.jid);
+                              setIsSessionPlaying(true);
+                            }
                           }
                           pausedOnDragRef.current = false;
                         }}
@@ -461,8 +469,8 @@ export default function GroupSessionController({
                     idx < currentJourneyIdx
                       ? "px-2 py-1 rounded bg-emerald-700 text-white text-xs"
                       : idx === currentJourneyIdx
-                      ? "px-2 py-1 rounded bg-cyan-700 text-white text-xs"
-                      : "px-2 py-1 rounded bg-slate-700 text-white text-xs"
+                        ? "px-2 py-1 rounded bg-cyan-700 text-white text-xs"
+                        : "px-2 py-1 rounded bg-slate-700 text-white text-xs"
                   }
                   title={String(jc.jid)}
                 >
@@ -495,7 +503,7 @@ export default function GroupSessionController({
                     setIsSessionPlaying(false);
                     setCurrentJourneyIdx(nextIdx);
                     setSeekValues((prev) => ({ ...prev, [activePair.sessionId]: 0 }));
-                    commandSession(activePair.sessionId, "select_journey", { journeyId: target.jid }).catch(() => {});
+                    commandSession(activePair.sessionId, "select_journey", { journeyId: target.jid }).catch(() => { });
                   }
                 }
               }}
@@ -591,11 +599,10 @@ export default function GroupSessionController({
                               {p.vrId}
                             </span>
                             <span
-                              className={`rounded-full ${
-                                vrOnline
-                                  ? "text-emerald-500 bg-emerald-500 animate-pulse"
-                                  : "text-red-500 bg-red-500 animate-ping"
-                              }`}
+                              className={`rounded-full ${vrOnline
+                                ? "text-emerald-500 bg-emerald-500 animate-pulse"
+                                : "text-red-500 bg-red-500 animate-ping"
+                                }`}
                             >
                               <Dot className="w-4 h-4" />
                             </span>
@@ -607,11 +614,10 @@ export default function GroupSessionController({
                               {p.chairId}
                             </span>
                             <span
-                              className={`rounded-full ${
-                                chairOnline
-                                  ? "text-emerald-500 bg-emerald-500 animate-pulse"
-                                  : "text-red-500 bg-red-500 animate-ping"
-                              }`}
+                              className={`rounded-full ${chairOnline
+                                ? "text-emerald-500 bg-emerald-500 animate-pulse"
+                                : "text-red-500 bg-red-500 animate-ping"
+                                }`}
                             >
                               <Dot className="w-4 h-4" />
                             </span>
