@@ -73,8 +73,8 @@ instance.interceptors.request.use(
           const res = await axios.post(
             `${
               import.meta.env.VITE_API_URL || "http://localhost:8001/api"
-            }/auth/refresh-tokens`,
-            { refreshToken },
+            }/auth/refresh-token`,
+            { refresh_token: refreshToken },
             { withCredentials: true }
           );
 
