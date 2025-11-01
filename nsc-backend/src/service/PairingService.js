@@ -6,11 +6,42 @@ const CODE_TTL_MINUTES = 10;
 class PairingService {
   async nextId(type, t) {
     // Ensure row exists for type
-    const [row] = await IdCounter.findOrCreate({
+    const [row, created] = await IdCounter.findOrCreate({
       where: { type },
       defaults: { type, last_number: 0 },
       transaction: t,
     });
+
+    // If first time creating counter for this type, seed it from existing max id
+    if (created) {
+      let maxNum = 0;
+      if (type === 'vr') {
+        const latest = await VRDevice.findOne({
+          attributes: ['id'],
+          order: [['id', 'DESC']],
+          transaction: t,
+        });
+        if (latest && latest.id) {
+          const m = latest.id.match(/_#(\d+)$/);
+          if (m) maxNum = parseInt(m[1], 10);
+        }
+      } else {
+        const latest = await ChairDevice.findOne({
+          attributes: ['id'],
+          order: [['id', 'DESC']],
+          transaction: t,
+        });
+        if (latest && latest.id) {
+          const m = latest.id.match(/_#(\d+)$/);
+          if (m) maxNum = parseInt(m[1], 10);
+        }
+      }
+      if (maxNum > 0) {
+        await row.update({ last_number: maxNum }, { transaction: t });
+        await row.reload({ transaction: t });
+      }
+    }
+
     // increment atomically
     await row.increment('last_number', { by: 1, transaction: t });
     await row.reload({ transaction: t });
@@ -53,16 +84,52 @@ class PairingService {
       if (type === 'vr') {
         device = await VRDevice.findOne({ where: { deviceId }, transaction: t });
         if (!device) {
-          const newId = await this.nextId('vr', t);
-          device = await VRDevice.create({ id: newId, deviceId, metadata: metadata || null, registeredAt: new Date() }, { transaction: t });
+          // Retry loop to avoid rare duplicate key collisions
+          const MAX_RETRIES = 5;
+          for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
+            const newId = await this.nextId('vr', t);
+            try {
+              device = await VRDevice.create(
+                { id: newId, deviceId, metadata: metadata || null, registeredAt: new Date() },
+                { transaction: t }
+              );
+              break;
+            } catch (err) {
+              const msg = (err && err.original && err.original.sqlMessage) || err.message || '';
+              if (msg.includes('Duplicate entry') || (err.name === 'SequelizeUniqueConstraintError')) {
+                // try next id
+                device = null;
+                continue;
+              }
+              throw err;
+            }
+          }
+          if (!device) throw new Error('Failed to allocate unique VR device id after retries');
         } else if (metadata) {
           await device.update({ metadata }, { transaction: t });
         }
       } else {
         device = await ChairDevice.findOne({ where: { deviceId }, transaction: t });
         if (!device) {
-          const newId = await this.nextId('chair', t);
-          device = await ChairDevice.create({ id: newId, deviceId, metadata: metadata || null, registeredAt: new Date() }, { transaction: t });
+          const MAX_RETRIES = 5;
+          for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
+            const newId = await this.nextId('chair', t);
+            try {
+              device = await ChairDevice.create(
+                { id: newId, deviceId, metadata: metadata || null, registeredAt: new Date() },
+                { transaction: t }
+              );
+              break;
+            } catch (err) {
+              const msg = (err && err.original && err.original.sqlMessage) || err.message || '';
+              if (msg.includes('Duplicate entry') || (err.name === 'SequelizeUniqueConstraintError')) {
+                device = null;
+                continue;
+              }
+              throw err;
+            }
+          }
+          if (!device) throw new Error('Failed to allocate unique Chair device id after retries');
         } else if (metadata) {
           await device.update({ metadata }, { transaction: t });
         }
