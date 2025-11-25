@@ -41,7 +41,29 @@ export default function Login() {
         : '/operator'
       navigate(dest, { replace: true })
     } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : 'Login failed'
+      interface ApiError { response?: { data?: { message?: unknown } } }
+      const apiMessageUnknown = (e as ApiError).response?.data?.message
+      const apiMessage: string | undefined = typeof apiMessageUnknown === 'string' ? apiMessageUnknown : undefined
+      if (apiMessage === 'Wrong Password!') {
+        form.setError('password', { type: 'server', message: apiMessage })
+        form.setFocus('password')
+        toast.error(apiMessage)
+        return
+      }
+      if (apiMessage === 'Invalid Email Address!') {
+        form.setError('email', { type: 'server', message: apiMessage })
+        form.setFocus('email')
+        toast.error(apiMessage)
+        return
+      }
+      if (apiMessage === 'Wrong Credentials!') {
+        form.setError('email', { type: 'server', message: apiMessage })
+        form.setError('password', { type: 'server', message: apiMessage })
+        form.setFocus('email')
+        toast.error(apiMessage)
+        return
+      }
+      const message = apiMessage || (e instanceof Error ? e.message : 'Login failed')
       toast.error(message)
     }
   }
@@ -107,6 +129,7 @@ export default function Login() {
                               {...field}
                               className={customCss.input}
                               required
+                              autoComplete="email"
                             />
                             <Users className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-100" />
                           </div>
@@ -131,6 +154,7 @@ export default function Login() {
                               {...field}
                               className={customCss.input}
                               required
+                              autoComplete="current-password"
                             />
                             <button
                               type="button"

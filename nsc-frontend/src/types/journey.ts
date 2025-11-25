@@ -5,6 +5,7 @@ export type JourneyItem = {
     description: string | null
     createdAt?: string
     updatedAt?: string
+    telemetry_id?: number | null
   }
   video: {
     id: number
@@ -29,5 +30,6 @@ export type JourneyItem = {
     format?: string
     url?: string
   }
+
   languages?: string[]
 }

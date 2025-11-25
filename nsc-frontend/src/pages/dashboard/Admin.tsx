@@ -128,13 +128,13 @@ export default function Admin() {
           <h1 className="text-3xl font-bold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
             Admin Dashboard
           </h1>
-          <p className="text-slate-400 mt-1 flex items-center gap-2">
+          <div className="text-slate-400 mt-1 flex items-center gap-2">
             <span>Welcome back, <span className="font-semibold text-white">{user?.name}</span></span>
             <Badge variant="secondary" className="ml-2">
               <Activity className="w-3 h-3 mr-1" />
               Live
             </Badge>
-          </p>
+          </div>
         </div>
       </div>
 

@@ -7,7 +7,12 @@ const controller = new DeviceController();
 // Generate a 6-digit pairing code for 'vr' or 'chair'
 router.post('/pairing-code', controller.generateCode);
 
-// Register device with { type, code, deviceId, metadata? } (device id will be assigned like VR_#001 / CHAIR_#001)
+// Generate a bundle code for pairing VR + Chair simultaneously
+router.post('/pairing-bundle', controller.generateBundleCode);
+// Poll bundle pairing status
+router.get('/pairing-bundle/:code', controller.getBundleStatus);
+
+// Register device with { type, code | bundleCode, deviceId, metadata? }
 router.post('/register', controller.register);
 
 // List registered devices

@@ -23,6 +23,7 @@ type Device = {
   type: DeviceType;
   name: string;
   online: boolean;
+  deviceId?: string; // Hardware device ID for MQTT communication
   lastSeen?: number;
   status?: string;
   positionMs?: number;
@@ -483,6 +484,7 @@ export default function DeviceControlPanel() {
                     if (!d?.deviceId) return;
                     next.set(d.deviceId as string, {
                       id: d.deviceId as string,
+                      deviceId: d.deviceId as string,
                       type: (d.type as DeviceType) || "unknown",
                       name: (d.name as string) || (d.deviceId as string),
                       online: true,
@@ -509,6 +511,7 @@ export default function DeviceControlPanel() {
             renderDevices((map) => {
               const cur: Device = map.get(data.deviceId!) || {
                 id: data.deviceId!,
+                deviceId: data.deviceId!,
                 type: "unknown",
                 name: data.deviceId!,
                 online: false,
@@ -527,7 +530,7 @@ export default function DeviceControlPanel() {
             const id = (h as { deviceId?: string })?.deviceId;
             if (!id) return;
             renderDevices((map) => {
-              const cur: Device = map.get(id) || { id, type: "unknown", name: id, online: false };
+              const cur: Device = map.get(id) || { id, deviceId: id, type: "unknown", name: id, online: false };
               cur.online = true;
               cur.lastSeen = Date.now();
               map.set(id, cur);
@@ -544,7 +547,7 @@ export default function DeviceControlPanel() {
             const id = (s as { deviceId?: string })?.deviceId;
             if (!id) return;
             renderDevices((map) => {
-              const cur: Device = map.get(id) || { id, type: "unknown", name: id, online: false };
+              const cur: Device = map.get(id) || { id, deviceId: id, type: "unknown", name: id, online: false };
               cur.online = true;
               cur.lastSeen = Date.now();
               map.set(id, cur);
@@ -563,6 +566,7 @@ export default function DeviceControlPanel() {
             renderDevices((map) => {
               const cur: Device = map.get(id) || {
                 id,
+                deviceId: id,
                 type: ((d as { type?: DeviceType })?.type as DeviceType) || "unknown",
                 name: id,
                 online: false,
@@ -570,6 +574,7 @@ export default function DeviceControlPanel() {
               cur.online = false;
               // Ensure UI treats playback as paused when device goes offline
               cur.status = "idle";
+              cur.playing = false;
               map.set(id, cur);
               return map;
             });
@@ -642,10 +647,15 @@ export default function DeviceControlPanel() {
         positionMs: Number(positionMs || 0),
         timestamp: new Date().toISOString(),
       };
-      publishTopic(`devices/${pair.vrId}/commands/${type}`, JSON.stringify(payload), false);
-      publishTopic(`devices/${pair.chairId}/commands/${type}`, JSON.stringify(payload), false);
+      // Look up hardware deviceId from device list (devices listen to their hardware ID, not database ID)
+      const vrDevice = devicesList.find(d => d.id === pair.vrId);
+      const chairDevice = devicesList.find(d => d.id === pair.chairId);
+      const vrHwId = vrDevice?.deviceId || pair.vrId;
+      const chairHwId = chairDevice?.deviceId || pair.chairId;
+      publishTopic(`devices/${vrHwId}/commands/${type}`, JSON.stringify(payload), false);
+      publishTopic(`devices/${chairHwId}/commands/${type}`, JSON.stringify(payload), false);
     },
-    [publishTopic],
+    [publishTopic, devicesList],
   );
 
   const resetFlow = useCallback(() => {
@@ -796,7 +806,7 @@ export default function DeviceControlPanel() {
     <div className="">
       <div className="container">
         {/* Progress Stepper */}
-        <ProgressStepper currentStepNumber={currentStepNumber} connected={connected} mode={mode} />
+        <ProgressStepper currentStepNumber={currentStepNumber} connected={connected} mode={mode} sessionType={sessionType} />
 
         {/* Main Content */}
         <div className="space-y-6">
@@ -832,6 +842,8 @@ export default function DeviceControlPanel() {
               onBack={resetFlow}
               onContinue={() => {
                 if (sessionType === "individual") {
+                  // For individual sessions, skip journey selection step
+                  // Journey selection will be done in controller
                   void handleCreateIndividual();
                 } else {
                   void loadJourneys();

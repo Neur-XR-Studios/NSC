@@ -6,6 +6,11 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       unique: true,
     },
+    display_name: {
+      type: DataTypes.STRING(32),
+      allowNull: true,
+      unique: true,
+    },
     deviceId: {
       type: DataTypes.STRING(128),
       allowNull: false,

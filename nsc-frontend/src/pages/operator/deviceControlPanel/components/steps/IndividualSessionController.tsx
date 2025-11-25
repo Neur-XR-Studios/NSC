@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Armchair, Headset, Dot, CirclePower, RefreshCw, InfoIcon, Users, X, Plus } from "lucide-react";
+import { Armchair, Headset, Dot, CirclePower, RefreshCw, InfoIcon, Users, X, Plus, Eye, ChevronLeft, ChevronRight } from "lucide-react";
 import type { JourneyItem } from "@/types/journey";
 import { VideoPlayer, type VideoPlayerHandle } from "@/components/media/VideoPlayer";
 import {
@@ -82,6 +82,7 @@ export default function IndividualSessionController({
   const [selectedVrId, setSelectedVrId] = useState("");
   const [selectedChairId, setSelectedChairId] = useState("");
   const [showPairModal, setShowPairModal] = useState(false);
+  const [selectedJourneyDetail, setSelectedJourneyDetail] = useState<JourneyItem | null>(null);
 
   // Filter out already paired devices
   const pairedVrIds = useMemo(() => new Set(sessionPairs.map((p) => p.vrId)), [sessionPairs]);
@@ -379,9 +380,10 @@ export default function IndividualSessionController({
                               if (playing) {
                                 // Include current position to ensure resume on devices that require it
                                 const currentMs =
-                                  typeof devicePositionMs === "number" && isFinite(devicePositionMs)
-                                    ? devicePositionMs
-                                    : playerRefs.current[key]?.getCurrentTimeMs() || 0;
+                                typeof devicePositionMs === "number" && isFinite(devicePositionMs)
+                                ? devicePositionMs
+                                : playerRefs.current[key]?.getCurrentTimeMs() || 0;
+                                console.log("Play", { vrId: p.vrId, chairId: p.chairId }, "play", currentMs);
                                 sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "play", currentMs);
                               } else {
                                 // Prefer device-reported position for accuracy in Individual mode
@@ -389,17 +391,21 @@ export default function IndividualSessionController({
                                   typeof devicePositionMs === "number" && isFinite(devicePositionMs)
                                     ? devicePositionMs
                                     : playerRefs.current[key]?.getCurrentTimeMs() || 0;
+                                console.log("Pause", { vrId: p.vrId, chairId: p.chairId }, "pause", currentMs);
                                 sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "pause", currentMs);
                               }
                             }}
                             onSeekEnd={(ms: number) => {
                               if (!sendParticipantCmd) return;
+                              console.log("Seek", { vrId: p.vrId, chairId: p.chairId }, "seek", ms);
                               sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "seek", ms);
                             }}
                             onTimeUpdateMs={(ms: number) => {
                               if (!activePair?.sessionId) return;
                               const clamped = Math.max(0, Math.min(durationMs || 0, Math.floor(ms || 0)));
-                              if (seekKey) setSeekValues((prev) => ({ ...prev, [seekKey]: clamped }));
+                              if (seekKey) {
+                                setSeekValues((prev) => ({ ...prev, [seekKey]: clamped }));
+                              }
                             }}
                           />
                         ) : (
@@ -442,7 +448,7 @@ export default function IndividualSessionController({
                             </span>
                           </div>
                         </div>
-                        {setPairs && (
+                        {/* {setPairs && (
                           <div>
                             <Button
                               variant="destructive"
@@ -506,7 +512,7 @@ export default function IndividualSessionController({
                               Unpair
                             </Button>
                           </div>
-                        )}
+                        )} */}
 
                         {/* Audio/Language controls */}
                         <div className="flex items-center gap-2">
@@ -559,27 +565,28 @@ export default function IndividualSessionController({
                       {/* Participant journey selection (Individual) */}
                       {
                         <div className="px-3 pb-2 pt-2">
-                          <div className="text-xs text-slate-400 mb-2">Select Journey:</div>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            {allJourneyCards.map((jc: { jid: number; item: JourneyItem }) => (
-                              <button
-                                key={`${key}-jc-${jc.jid}`}
-                                onClick={() => {
+                          <div className="text-xs text-slate-400 mb-3">Select Journey:</div>
+                          <div className="flex items-center gap-3">
+                            {/* Carousel Navigation */}
+                            <button
+                              onClick={() => {
+                                const idx = Math.max(0, (allJourneyCards.findIndex((j) => Number(j.jid) === Number(currentJid)) || 0) - 1);
+                                const journeyToSelect = allJourneyCards[idx];
+                                if (journeyToSelect) {
                                   const pid = participantIdByPair[key];
                                   if (!pid || !activePair?.sessionId) return;
 
-                                  // Get selected language for this participant
                                   const selectedAudioUrl = audioSel[key];
-                                  const tracks = (jc.item.audio_tracks || []) as {
+                                  const tracks = (journeyToSelect.item.audio_tracks || []) as {
                                     url?: string;
                                     language_code?: string;
                                   }[];
                                   const selectedTrack = tracks.find((t) => t.url === selectedAudioUrl);
                                   const language = selectedTrack?.language_code || tracks[0]?.language_code || "";
 
-                                  setSelectedJourneyByPair((prev) => ({ ...prev, [key]: jc.jid }));
+                                  setSelectedJourneyByPair((prev) => ({ ...prev, [key]: journeyToSelect.jid }));
 
-                                  const newTracks = (jc.item.audio_tracks || []) as {
+                                  const newTracks = (journeyToSelect.item.audio_tracks || []) as {
                                     url?: string;
                                     language_code?: string;
                                   }[];
@@ -593,33 +600,161 @@ export default function IndividualSessionController({
                                     }
                                   }
 
-                                  // Send command to device
                                   commandParticipant(activePair.sessionId, pid, "select_journey", {
-                                    journeyId: jc.jid,
+                                    journeyId: journeyToSelect.jid,
                                     language: language,
                                   }).catch((e) => {
                                     console.error(`[ControllerStep] Failed to send select_journey:`, e);
-                                    // Revert local state on failure
-                                    setSelectedJourneyByPair((prev) => {
-                                      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                                      const { [key]: _, ...rest } = prev;
-                                      return rest;
-                                    });
                                   });
-                                }}
-                                className={
-                                  Number(currentJid) === Number(jc.jid)
-                                    ? "px-2 py-1 rounded bg-cyan-700 text-white text-xs"
-                                    : "px-2 py-1 rounded bg-slate-700 text-white text-xs hover:bg-slate-600"
                                 }
-                                title={String(jc.jid)}
-                              >
-                                <div className="flex items-center gap-2">
-                                  <img src={jc.item.video.thumbnail_url} alt="" className="w-6 h-6" />
-                                  <span className="truncate max-w-[140px]">{String(jc.item.journey.title)}</span>
-                                </div>
-                              </button>
-                            ))}
+                              }}
+                              className="p-1.5 rounded bg-slate-700 hover:bg-slate-600 text-white transition-colors"
+                              title="Previous journey"
+                            >
+                              <ChevronLeft className="w-4 h-4" />
+                            </button>
+
+                            {/* Journey Cards Carousel */}
+                            <div className="flex-1 overflow-x-auto scrollbar-hide">
+                              <div className="flex gap-2 pb-2">
+                                {allJourneyCards.map((jc: { jid: number; item: JourneyItem }) => {
+                                  const isSelected = Number(currentJid) === Number(jc.jid);
+                                  const thumb = jc.item.video?.thumbnail_url;
+                                  const title = jc.item.journey?.title || jc.item.video?.title || "Untitled";
+                                  
+                                  return (
+                                    <div
+                                      key={`${key}-jc-${jc.jid}`}
+                                      className={`flex-shrink-0 group relative rounded-lg overflow-hidden cursor-pointer transition-all border-2 ${
+                                        isSelected
+                                          ? "border-cyan-500 shadow-lg shadow-cyan-500/30"
+                                          : "border-slate-700 hover:border-slate-600"
+                                      }`}
+                                      onClick={() => {
+                                        const pid = participantIdByPair[key];
+                                        if (!pid || !activePair?.sessionId) return;
+
+                                        const selectedAudioUrl = audioSel[key];
+                                        const tracks = (jc.item.audio_tracks || []) as {
+                                          url?: string;
+                                          language_code?: string;
+                                        }[];
+                                        const selectedTrack = tracks.find((t) => t.url === selectedAudioUrl);
+                                        const language = selectedTrack?.language_code || tracks[0]?.language_code || "";
+
+                                        setSelectedJourneyByPair((prev) => ({ ...prev, [key]: jc.jid }));
+
+                                        const newTracks = (jc.item.audio_tracks || []) as {
+                                          url?: string;
+                                          language_code?: string;
+                                        }[];
+                                        if (newTracks.length > 0) {
+                                          const preferredTrack =
+                                            newTracks.find(
+                                              (t: { url?: string; language_code?: string }) => t.language_code === language,
+                                            ) || newTracks[0];
+                                          if (preferredTrack?.url) {
+                                            setAudioSel((prev) => ({ ...prev, [key]: preferredTrack.url! }));
+                                          }
+                                        }
+
+                                        commandParticipant(activePair.sessionId, pid, "select_journey", {
+                                          journeyId: jc.jid,
+                                          language: language,
+                                        }).catch((e) => {
+                                          console.error(`[ControllerStep] Failed to send select_journey:`, e);
+                                        });
+                                      }}
+                                    >
+                                      {/* Card Image */}
+                                      <div
+                                        className="relative w-24 h-24 bg-slate-800"
+                                      >
+                                        {thumb && (
+                                          <img
+                                            src={thumb}
+                                            alt={title}
+                                            className="w-full h-full object-cover"
+                                          />
+                                        )}
+                                        
+                                        {/* Overlay with Eye Button */}
+                                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setSelectedJourneyDetail(jc.item);
+                                            }}
+                                            className="opacity-0 group-hover:opacity-100 transition-opacity p-2 rounded-full bg-cyan-600 hover:bg-cyan-700 text-white shadow-lg"
+                                            title="View journey details"
+                                          >
+                                            <Eye className="w-4 h-4" />
+                                          </button>
+                                        </div>
+
+                                        {/* Selection Badge */}
+                                        {isSelected && (
+                                          <div className="absolute top-1 right-1 w-3 h-3 rounded-full bg-cyan-500 shadow-lg" />
+                                        )}
+                                      </div>
+
+                                      {/* Title */}
+                                      <div className="px-2 py-1.5 bg-slate-900/80 text-white">
+                                        <p className="text-xs font-medium truncate">{title}</p>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            {/* Next Button */}
+                            <button
+                              onClick={() => {
+                                const currentIdx = allJourneyCards.findIndex((j) => Number(j.jid) === Number(currentJid));
+                                const idx = Math.min(allJourneyCards.length - 1, (currentIdx || 0) + 1);
+                                const journeyToSelect = allJourneyCards[idx];
+                                if (journeyToSelect) {
+                                  const pid = participantIdByPair[key];
+                                  if (!pid || !activePair?.sessionId) return;
+
+                                  const selectedAudioUrl = audioSel[key];
+                                  const tracks = (journeyToSelect.item.audio_tracks || []) as {
+                                    url?: string;
+                                    language_code?: string;
+                                  }[];
+                                  const selectedTrack = tracks.find((t) => t.url === selectedAudioUrl);
+                                  const language = selectedTrack?.language_code || tracks[0]?.language_code || "";
+
+                                  setSelectedJourneyByPair((prev) => ({ ...prev, [key]: journeyToSelect.jid }));
+
+                                  const newTracks = (journeyToSelect.item.audio_tracks || []) as {
+                                    url?: string;
+                                    language_code?: string;
+                                  }[];
+                                  if (newTracks.length > 0) {
+                                    const preferredTrack =
+                                      newTracks.find(
+                                        (t: { url?: string; language_code?: string }) => t.language_code === language,
+                                      ) || newTracks[0];
+                                    if (preferredTrack?.url) {
+                                      setAudioSel((prev) => ({ ...prev, [key]: preferredTrack.url! }));
+                                    }
+                                  }
+
+                                  commandParticipant(activePair.sessionId, pid, "select_journey", {
+                                    journeyId: journeyToSelect.jid,
+                                    language: language,
+                                  }).catch((e) => {
+                                    console.error(`[ControllerStep] Failed to send select_journey:`, e);
+                                  });
+                                }
+                              }}
+                              className="p-1.5 rounded bg-slate-700 hover:bg-slate-600 text-white transition-colors"
+                              title="Next journey"
+                            >
+                              <ChevronRight className="w-4 h-4" />
+                            </button>
                           </div>
                         </div>
                       }
@@ -883,6 +1018,108 @@ export default function IndividualSessionController({
               </div>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Journey Details Modal */}
+      <Dialog open={!!selectedJourneyDetail} onOpenChange={() => setSelectedJourneyDetail(null)}>
+        <DialogContent className="max-w-2xl bg-slate-900 border-slate-800 text-white max-h-[90vh] overflow-y-auto">
+          {selectedJourneyDetail && (
+            <>
+              <DialogHeader className="sticky top-0 bg-slate-900 pb-4">
+                <DialogTitle className="text-2xl flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center flex-shrink-0">
+                    <Eye className="w-5 h-5" />
+                  </div>
+                  Journey Details
+                </DialogTitle>
+              </DialogHeader>
+
+              <div className="space-y-6">
+                {/* Thumbnail */}
+                {selectedJourneyDetail.video?.thumbnail_url && (
+                  <div className="relative rounded-xl overflow-hidden border border-slate-700">
+                    <img
+                      src={selectedJourneyDetail.video.thumbnail_url}
+                      alt="Journey thumbnail"
+                      className="w-full h-64 object-cover"
+                    />
+                  </div>
+                )}
+
+                {/* Journey Title */}
+                <div>
+                  <h3 className="text-lg font-semibold text-white mb-2">
+                    {selectedJourneyDetail.journey?.title || selectedJourneyDetail.video?.title || "Untitled Journey"}
+                  </h3>
+                  <p className="text-sm text-slate-300">
+                    {selectedJourneyDetail.journey?.description || selectedJourneyDetail.video?.description || "No description available"}
+                  </p>
+                </div>
+
+                {/* Video Details */}
+                {selectedJourneyDetail.video && (
+                  <div className="grid grid-cols-2 gap-4 p-4 rounded-lg bg-slate-800/40 border border-slate-700">
+                    <div>
+                      <span className="text-xs text-slate-400 uppercase">Duration</span>
+                      <p className="text-sm font-medium text-white">
+                        {Math.round((selectedJourneyDetail.video.duration_ms || 0) / 1000)}s
+                      </p>
+                    </div>
+                    <div>
+                      <span className="text-xs text-slate-400 uppercase">Format</span>
+                      <p className="text-sm font-medium text-white">
+                        {selectedJourneyDetail.video.mime_type || "MP4"}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Audio Tracks */}
+                {selectedJourneyDetail.audio_tracks && selectedJourneyDetail.audio_tracks.length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-300 mb-3">Available Languages</h4>
+                    <div className="grid grid-cols-2 gap-2">
+                      {selectedJourneyDetail.audio_tracks.map((track: any, idx: number) => (
+                        <div
+                          key={idx}
+                          className="p-3 rounded-lg bg-slate-800/40 border border-slate-700 hover:border-slate-600 transition-colors"
+                        >
+                          <div className="text-sm font-medium text-white">
+                            {track.language_code || `Track ${idx + 1}`}
+                          </div>
+                          <div className="text-xs text-slate-400">
+                            {track.title || "Audio Track"}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Telemetry Info if available */}
+                {selectedJourneyDetail.journey?.telemetry_id && (
+                  <div className="p-3 rounded-lg bg-slate-800/40 border border-slate-700">
+                    <div className="flex items-center gap-2 text-sm text-slate-300">
+                      <div className="w-2 h-2 rounded-full bg-cyan-500" />
+                      <span>Telemetry Data Available</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Close Button */}
+                <div className="flex justify-end gap-2 sticky bottom-0 bg-slate-900 pt-4">
+                  <Button
+                    variant="outline"
+                    onClick={() => setSelectedJourneyDetail(null)}
+                    className="border-slate-700 text-slate-300 hover:bg-slate-800"
+                  >
+                    Close
+                  </Button>
+                </div>
+              </div>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </div>

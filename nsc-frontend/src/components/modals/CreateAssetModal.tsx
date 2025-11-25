@@ -9,7 +9,7 @@ import { useToast } from '@/hooks/use-toast'
 import { JsonViewer } from '@/components/code/JsonViewer'
 import { VideoPlayer } from '@/components/media/VideoPlayer'
 import { AudioPlayer } from '@/components/media/AudioPlayer'
-import { Trash2, X } from 'lucide-react'
+import { Trash2, X, Loader2 } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -40,7 +40,7 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({ open, onClos
         journey_description: z.string().min(1, 'Description is required'),
         video: FileSchema,
         telemetry: FileSchema,
-        audios: z.array(AudioSchema).min(1, 'At least one audio is required'),
+        audios: z.array(AudioSchema).min(0, 'Audio tracks are optional'),
     })
     type FormValues = z.infer<typeof FormSchema>
 
@@ -62,6 +62,8 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({ open, onClos
         { id: Math.random().toString(), language_code: 'en', file: null },
     ])
     const [submitting, setSubmitting] = React.useState(false)
+    const [uploadProgress, setUploadProgress] = React.useState(0)
+    const [uploadingFile, setUploadingFile] = React.useState<string | null>(null)
 
     React.useEffect(() => {
         if (!open) return
@@ -132,8 +134,10 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({ open, onClos
     const onSubmit = async (values: FormValues) => {
         try {
             setSubmitting(true)
+            setUploadProgress(0)
 
             // 1) Upload video
+            setUploadingFile('Video')
             const vfd = new FormData()
             vfd.append('title', values.journey_title)
             vfd.append('description', values.journey_description)
@@ -142,42 +146,72 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({ open, onClos
             const videoRes = await api.post<ApiEnvelope<{ id: number }>>(
                 '/videos',
                 vfd,
-                { headers: { 'Content-Type': 'multipart/form-data' } }
+                {
+                    onUploadProgress: (progressEvent) => {
+                        if (progressEvent.total) {
+                            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+                            setUploadProgress(percentCompleted)
+                        }
+                    }
+                }
             )
             const video_id = videoRes.data?.id
             if (!video_id) throw new Error('Video upload failed')
+            setUploadProgress(100)
 
             // 2) Upload audios
             const audioTrackIds: number[] = []
             for (const a of audioFields) {
                 if (!a.file) continue
+                setUploadingFile('Audio Track')
+                setUploadProgress(0)
                 const afd = new FormData()
                 afd.append('language_code', a.language_code || 'en')
                 afd.append('audio', a.file)
                 const aRes = await api.post<ApiEnvelope<{ id: number }>>(
                     '/audio-tracks',
                     afd,
-                    { headers: { 'Content-Type': 'multipart/form-data' } }
+                    {
+                        onUploadProgress: (progressEvent) => {
+                            if (progressEvent.total) {
+                                const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+                                setUploadProgress(percentCompleted)
+                            }
+                        }
+                    }
                 )
                 const aid = aRes.data?.id
                 if (aid) audioTrackIds.push(aid)
+                setUploadProgress(100)
             }
 
             // 3) Upload telemetry
             let telemetry_id: number | null = null
             if (telemetryFile) {
+                setUploadingFile('Telemetry')
+                setUploadProgress(0)
                 const tfd = new FormData()
                 tfd.append('telemetry', telemetryFile)
                 tfd.append('video_id', String(video_id))
                 const tRes = await api.post<ApiEnvelope<{ id: number }>>(
                     '/telemetry',
                     tfd,
-                    { headers: { 'Content-Type': 'multipart/form-data' } }
+                    {
+                        onUploadProgress: (progressEvent) => {
+                            if (progressEvent.total) {
+                                const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+                                setUploadProgress(percentCompleted)
+                            }
+                        }
+                    }
                 )
                 telemetry_id = tRes.data?.id ?? null
+                setUploadProgress(100)
             }
 
             // 4) Create journey
+            setUploadingFile(null)
+            setUploadProgress(0)
             const jBody = {
                 video_id,
                 telemetry_id: telemetry_id ?? undefined,
@@ -200,6 +234,8 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({ open, onClos
             toast({ title: 'Error', description: msg, variant: 'destructive' })
         } finally {
             setSubmitting(false)
+            setUploadProgress(0)
+            setUploadingFile(null)
         }
     }
 
@@ -253,7 +289,7 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({ open, onClos
                                 onChange={(e) => {
                                     const f = e.target.files?.[0] || null
                                     setVideoFile(f)
-                                    if (f) setValue('video', f)
+                                    if (f) setValue('video', f, { shouldValidate: true })
                                     setVideoPreviewUrl((prev) => {
                                         if (prev) URL.revokeObjectURL(prev)
                                         return f ? URL.createObjectURL(f) : null
@@ -292,7 +328,7 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({ open, onClos
                                 onChange={async (e) => {
                                     const f = e.target.files?.[0] || null
                                     setTelemetryFile(f)
-                                    if (f) setValue('telemetry', f)
+                                    if (f) setValue('telemetry', f, { shouldValidate: true })
                                     setTelemetryPreviewUrl((prev) => {
                                         if (prev) URL.revokeObjectURL(prev)
                                         return f ? URL.createObjectURL(f) : null
@@ -327,7 +363,7 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({ open, onClos
 
                 <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                        <div className="text-sm font-medium">Audio Tracks</div>
+                        <div className="text-sm font-medium">Audio Tracks <span className="text-xs text-gray-500">(Optional)</span></div>
                     </div>
 
                     <div className="space-y-3">
@@ -398,9 +434,33 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({ open, onClos
                         Cancel
                     </Button>
                     <Button type="submit" variant="default" className={customCss.button} disabled={submitting}>
-                        {submitting ? 'Creating...' : 'Create Asset'}
+                        {submitting ? (
+                            <span className="flex items-center gap-2">
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                Creating...
+                            </span>
+                        ) : 'Create Asset'}
                     </Button>
                 </div>
+
+                {submitting && uploadingFile && (
+                    <div className="mt-4 p-4 bg-zinc-900 rounded-lg border border-zinc-800">
+                        <div className="flex items-center gap-2 mb-2">
+                            <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
+                            <span className="text-sm font-medium">Uploading {uploadingFile}...</span>
+                        </div>
+                        <div className="w-full bg-zinc-800 rounded-full h-2 overflow-hidden">
+                            <div
+                                className="bg-gradient-to-r from-blue-500 to-cyan-500 h-full transition-all duration-300"
+                                style={{ width: `${uploadProgress}%` }}
+                            />
+                        </div>
+                        <div className="flex justify-between items-center mt-2">
+                            <span className="text-xs text-zinc-400">{uploadingFile}</span>
+                            <span className="text-xs font-medium text-zinc-300">{uploadProgress}%</span>
+                        </div>
+                    </div>
+                )}
             </form>
         </CustomDialog>
     )

@@ -5,6 +5,7 @@ import { fileURLToPath, URL } from 'node:url'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  base: '/', // Ensure assets are loaded from root, not /api/
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

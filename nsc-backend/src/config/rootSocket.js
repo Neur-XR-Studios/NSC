@@ -32,8 +32,15 @@ const rootSocket = (io) => {
         console.log('New connection');
         // Send current device snapshot immediately so admin sees online devices after refresh/reconnect
         try {
-            const devices = deviceDiscoveryService.getDiscoveredDevices();
-            socket.emit('devices:snapshot', devices);
+            const allDevices = deviceDiscoveryService.getDiscoveredDevices();
+            // Filter to only send devices that are actually online (have recent heartbeat)
+            const onlineDevices = allDevices.filter(d => {
+                if (!d.lastSeen) return false;
+                const ageMs = Date.now() - new Date(d.lastSeen).getTime();
+                // Only include if seen within heartbeat timeout window
+                return ageMs < deviceDiscoveryService.HEARTBEAT_TIMEOUT;
+            });
+            socket.emit('devices:snapshot', onlineDevices);
         } catch (e) {
             console.error('Error emitting devices snapshot on connect', e);
         }
@@ -145,8 +152,14 @@ const rootSocket = (io) => {
         // Allow clients to fetch device list on demand
         socket.on('devices:get', () => {
             try {
-                const devices = deviceDiscoveryService.getDiscoveredDevices();
-                socket.emit('devices:snapshot', devices);
+                const allDevices = deviceDiscoveryService.getDiscoveredDevices();
+                // Filter to only send devices that are actually online
+                const onlineDevices = allDevices.filter(d => {
+                    if (!d.lastSeen) return false;
+                    const ageMs = Date.now() - new Date(d.lastSeen).getTime();
+                    return ageMs < deviceDiscoveryService.HEARTBEAT_TIMEOUT;
+                });
+                socket.emit('devices:snapshot', onlineDevices);
             } catch (e) {
                 console.error('Error handling devices:get', e);
             }

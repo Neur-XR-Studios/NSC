@@ -10,26 +10,18 @@ import { useToast } from '@/hooks/use-toast'
 import { z } from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { X } from 'lucide-react'
+import { X, Eye, EyeOff } from 'lucide-react'
 
 const FormSchema = z.object({
   email: z.string().email('Valid email required'),
   password: z.union([
     z.literal(''),
-    z
-      .string()
-      .min(8, 'Password must be at least 8 characters')
-      .regex(/^[a-zA-Z0-9_]*$/, 'Only letters, numbers, and underscores are allowed'),
+    z.string().min(1, 'Password is required'),
   ]),
   first_name: z.string().min(1, 'First name is required'),
   last_name: z.string().min(1, 'Last name is required'),
   role: z.string().min(1, 'Role is required'),
   status: z.union([z.literal(0), z.literal(1)]),
-  address: z.string().min(1, 'Address is required'),
-  phone_number: z
-    .string()
-    .min(1, 'Phone is required')
-    .regex(/^\d+$/, 'Only digits are allowed'),
 })
 
 type FormValues = z.infer<typeof FormSchema>
@@ -42,8 +34,6 @@ export type UserForEdit = {
   email: string
   role: string
   status: number
-  address?: string | null
-  phone_number?: string | null
 }
 
 interface EditUserModalProps {
@@ -56,6 +46,7 @@ interface EditUserModalProps {
 export const EditUserModal: React.FC<EditUserModalProps> = ({ open, onClose, onUpdated, user }) => {
   const { toast } = useToast()
   const [isFormReady, setIsFormReady] = React.useState(false)
+  const [showPassword, setShowPassword] = React.useState(false)
   const form = useForm<FormValues>({
     resolver: zodResolver(FormSchema),
   })
@@ -70,15 +61,13 @@ export const EditUserModal: React.FC<EditUserModalProps> = ({ open, onClose, onU
       last_name: user.last_name,
       role: user.role,
       status: user.status ? 1 : 0,
-      address: user.address ?? '',
-      phone_number: user.phone_number ?? '',
     })
     setIsFormReady(true)
   }, [open, form, user])
 
   const onSubmit = async (values: FormValues) => {
     try {
-      await api.patch(`/users/${user.id}`, {...values, password: values.password || undefined})
+      await api.patch(`/users/${user.id}`, { ...values, password: values.password || undefined })
       toast({ title: 'User updated' })
       onClose()
       onUpdated?.()
@@ -129,12 +118,21 @@ export const EditUserModal: React.FC<EditUserModalProps> = ({ open, onClose, onU
                 <FormItem>
                   <FormLabel>Password</FormLabel>
                   <FormControl>
-                    <Input
-                      type="password"
-                      placeholder="••••••••"
-                      {...field}
-                      className={customCss.input}
-                    />
+                    <div className="relative">
+                      <Input
+                        type={showPassword ? 'text' : 'password'}
+                        placeholder="••••••••"
+                        {...field}
+                        className={customCss.input}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200 transition-colors"
+                      >
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -222,45 +220,6 @@ export const EditUserModal: React.FC<EditUserModalProps> = ({ open, onClose, onU
                       <SelectItem value="0">Inactive</SelectItem>
                     </SelectContent>
                   </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name="address"
-              render={({ field }) => (
-                <FormItem className="md:col-span-2">
-                  <FormLabel>Address</FormLabel>
-                  <FormControl>
-                    <Input
-                      placeholder="123 Main Street"
-                      {...field}
-                      className={customCss.input}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name="phone_number"
-              render={({ field }) => (
-                <FormItem className="md:col-span-2">
-                  <FormLabel>Phone Number</FormLabel>
-                  <FormControl>
-                    <Input
-                      type="tel"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      placeholder="1234567890"
-                      {...field}
-                      className={customCss.input}
-                    />
-                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )}

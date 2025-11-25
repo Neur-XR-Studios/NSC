@@ -268,6 +268,7 @@ export default function GroupSessionController({
                           });
                           setIsSessionPlaying(true);
                           const currentJourney = journeyCards[currentJourneyIdx];
+                          console.log("Play", activePair.sessionId, "play", 0, currentJourney?.jid);
                           sendCmd(activePair.sessionId, "play", 0, currentJourney?.jid);
                         }}
                         className="inline-flex items-center justify-center rounded bg-white/10 hover:bg-white/20 text-white"
@@ -293,6 +294,7 @@ export default function GroupSessionController({
                           });
                           setIsSessionPlaying(false);
                           const currentJourney = journeyCards[currentJourneyIdx];
+                          console.log("Pause", activePair.sessionId, "pause", currentMs, currentJourney?.jid);
                           sendCmd(activePair.sessionId, "pause", currentMs, currentJourney?.jid);
                         }}
                         className="inline-flex items-center justify-center rounded bg-white/10 hover:bg-white/20 text-white"
@@ -316,6 +318,7 @@ export default function GroupSessionController({
                           setDragging(true);
                           if (isPlaying && activePair) {
                             pausedOnDragRef.current = true;
+                            console.log("Pause", activePair.sessionId, "pause");
                             sendCmd(activePair.sessionId, "pause");
                           }
                         }}
@@ -323,6 +326,7 @@ export default function GroupSessionController({
                           setDragging(true);
                           if (isPlaying && activePair) {
                             pausedOnDragRef.current = true;
+                            console.log("Pause", activePair.sessionId, "pause");
                             sendCmd(activePair.sessionId, "pause");
                           }
                         }}
@@ -335,8 +339,10 @@ export default function GroupSessionController({
                               playerRefs.current[key]?.seekTo?.(val);
                             });
                             const currentJourney = journeyCards[currentJourneyIdx];
+                            console.log("Seek", activePair.sessionId, "seek", val, currentJourney?.jid);
                             sendCmd(activePair.sessionId, "seek", val, currentJourney?.jid);
                             if (isSessionPlaying) {
+                              console.log("Play", activePair.sessionId, "play", val, currentJourney?.jid);
                               sendCmd(activePair.sessionId, "play", val, currentJourney?.jid);
                               setIsSessionPlaying(true);
                             }
@@ -352,8 +358,10 @@ export default function GroupSessionController({
                               playerRefs.current[key]?.seekTo?.(val);
                             });
                             const currentJourney = journeyCards[currentJourneyIdx];
+                            console.log("Seek", activePair.sessionId, "seek", val, currentJourney?.jid);
                             sendCmd(activePair.sessionId, "seek", val, currentJourney?.jid);
                             if (isSessionPlaying) {
+                              console.log("Play", activePair.sessionId, "play", val, currentJourney?.jid);
                               sendCmd(activePair.sessionId, "play", val, currentJourney?.jid);
                               setIsSessionPlaying(true);
                             }
@@ -390,13 +398,15 @@ export default function GroupSessionController({
                         manualPausedRef.current = true;
                         sessionPairs.forEach((sp) => {
                           const key = `${sp.vrId}-${sp.chairId}`;
-                          playerRefs.current[key]?.pause?.();
                           playerRefs.current[key]?.seekTo?.(0);
+                          playerRefs.current[key]?.play?.();
                         });
-                        setIsSessionPlaying(false);
+                        setIsSessionPlaying(true);
                         const currentJourney = journeyCards[currentJourneyIdx];
-                        sendCmd(activePair.sessionId, "pause", 0, currentJourney?.jid);
+                        console.log("Seek", activePair.sessionId, "seek", 0, currentJourney?.jid);
                         sendCmd(activePair.sessionId, "seek", 0, currentJourney?.jid);
+                        console.log("Play", activePair.sessionId, "play", 0, currentJourney?.jid);
+                        sendCmd(activePair.sessionId, "play", 0, currentJourney?.jid);
                       }}
                       variant="destructive"
                       disabled={(sessionOfflineDevices?.length ?? 0) > 0}

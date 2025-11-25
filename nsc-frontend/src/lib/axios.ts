@@ -59,16 +59,28 @@ instance.interceptors.request.use(
     // Always ensure headers object exists
     config.headers = config.headers || {};
 
+    // Check if this is a multipart/form-data request
+    // We need to check if data is FormData BEFORE axios sets the Content-Type
+    const isMultipart = config.data instanceof FormData;
+
     const token =
       sessionStorage.getItem("token") ||
       useAuthStore.getState().accessToken ||
       "";
     const refreshToken = sessionStorage.getItem("refreshToken") || "";
 
-    // If token is expired and we have a refresh token, try to get a new access token
+    console.log('[Axios Interceptor] Request to:', config.url);
+    console.log('[Axios Interceptor] Is FormData:', isMultipart);
+    console.log('[Axios Interceptor] Has token:', !!token);
+    console.log('[Axios Interceptor] Token expired:', token ? isTokenExpired(token) : 'N/A');
+
+    // If token is expired and we have a refresh token, DON'T send the request yet
+    // Wait for refresh to complete first
     if (token && refreshToken && isTokenExpired(token)) {
       if (!isRefreshing) {
         isRefreshing = true;
+        console.log('[Axios Interceptor] Token expired, refreshing...');
+        console.log('[Axios Interceptor] Refresh token:', refreshToken.substring(0, 20) + '...');
         try {
           const res = await axios.post(
             `${import.meta.env.VITE_API_URL || "http://localhost:8001/api"
@@ -77,8 +89,13 @@ instance.interceptors.request.use(
             { withCredentials: true }
           );
 
+          console.log('[Axios Interceptor] Refresh response:', res.data);
+
           const newAccessToken: string = res.data?.access?.token;
           const newRefreshToken: string = res.data?.refresh?.token;
+
+          console.log('[Axios Interceptor] New access token exists:', !!newAccessToken);
+          console.log('[Axios Interceptor] New refresh token exists:', !!newRefreshToken);
 
           if (!newAccessToken || !newRefreshToken)
             throw new Error("Invalid refresh response");
@@ -87,12 +104,21 @@ instance.interceptors.request.use(
           sessionStorage.setItem("token", newAccessToken);
           sessionStorage.setItem("refreshToken", newRefreshToken);
 
-          // Update current request header and flush queue
+          // Update current request header with NEW token
           setAuthHeader(config, newAccessToken);
           processQueue(null, newAccessToken);
 
+          // If multipart, let browser set Content-Type with boundary
+          if (isMultipart) {
+            delete config.headers['Content-Type'];
+          }
+
+          console.log('[Axios Interceptor] Token refreshed successfully');
           return config;
         } catch (err) {
+          console.error('[Axios Interceptor] Token refresh failed:', err);
+          const errorDetails = (err as any)?.response?.data || (err as Error)?.message || 'Unknown error';
+          console.error('[Axios Interceptor] Error details:', errorDetails);
           // On refresh failure, logout and reject queued
           try {
             useAuthStore.getState().logout();
@@ -107,10 +133,16 @@ instance.interceptors.request.use(
       }
 
       // If a refresh is already in progress, queue this request
+      // DON'T attach the expired token - wait for the new one
+      console.log('[Axios Interceptor] Refresh in progress, queueing request');
       return new Promise((resolve, reject) => {
         failedQueue.push({
           resolve: (newToken: string) => {
             setAuthHeader(config, newToken);
+            // If multipart, let browser set Content-Type with boundary
+            if (isMultipart) {
+              delete config.headers['Content-Type'];
+            }
             resolve(config);
           },
           reject,
@@ -118,9 +150,17 @@ instance.interceptors.request.use(
       });
     }
 
-    // If we have a valid token, attach it
-    if (token) {
+    // Only attach token if it's NOT expired
+    if (token && !isTokenExpired(token)) {
       setAuthHeader(config, token);
+    } else if (!token) {
+      console.warn('[Axios Interceptor] No token available for request');
+    }
+
+    // If multipart/form-data, let browser set Content-Type with boundary
+    // This is critical for file uploads to work correctly
+    if (isMultipart) {
+      delete config.headers['Content-Type'];
     }
 
     return config;

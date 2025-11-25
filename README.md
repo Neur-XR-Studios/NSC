@@ -72,8 +72,15 @@ docker compose logs -f backend
 ```
 docker compose down
 ```
+- Delete all the tables:
+```
+docker compose --env-file .env.docker exec mysql mysql -uroot -proot -e 
+"DROP DATABASE IF EXISTS nsc_db; CREATE DATABASE nsc_db;"
+```
+
 
 ## Ports and services
+
 - Backend container listens on port 5000 internally; published as `${BACKEND_PORT}` (default 8001).
 - Frontend container listens on port 80; published as `${FRONTEND_PORT}` (default 8002).
 - Mosquitto WebSocket published on 9001 for browser access.

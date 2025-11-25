@@ -6,6 +6,7 @@ const audioRoute = require('./audioRoute');
 const telemetryRoute = require('./telemetryRoute');
 const journeyRoute = require('./journeyRoute');
 const deviceRoute = require('./deviceRoute');
+const devicePairRoute = require('./devicePairRoute');
 const sessionRoute = require('./sessionRoute');
 const sessionLogRoute = require('./sessionLogRoute');
 const router = express.Router();
@@ -38,6 +39,10 @@ const defaultRoutes = [
     {
         path: '/devices',
         route: deviceRoute,
+    },
+    {
+        path: '/device-pairs',
+        route: devicePairRoute,
     },
     {
         path: '/sessions',

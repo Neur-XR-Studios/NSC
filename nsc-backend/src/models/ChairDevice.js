@@ -5,6 +5,11 @@ module.exports = (sequelize, DataTypes) => {
       primaryKey: true,
       allowNull: false,
     },
+    display_name: {
+      type: DataTypes.STRING(32),
+      allowNull: true,
+      unique: true,
+    },
     deviceId: { // hardware-reported unique id
       type: DataTypes.STRING(128),
       allowNull: false,

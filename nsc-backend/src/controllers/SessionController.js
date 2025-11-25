@@ -109,6 +109,28 @@ class SessionController {
     }
   };
 
+  // Start session from device pair ID
+  startFromPair = async (req, res) => {
+    try {
+      const result = await this.service.startSessionFromPair(req.body);
+      return res.status(result.statusCode).send(result.response);
+    } catch (e) {
+      logger.error(e);
+      return res.status(httpStatus.BAD_GATEWAY).send({ status: false, message: e.message });
+    }
+  };
+
+  // Create group session from device pair IDs
+  createGroupFromPairs = async (req, res) => {
+    try {
+      const result = await this.service.createGroupSessionFromPairs(req.body);
+      return res.status(result.statusCode).send(result.response);
+    } catch (e) {
+      logger.error(e);
+      return res.status(httpStatus.BAD_GATEWAY).send({ status: false, message: e.message });
+    }
+  };
+
   // Send a command to a session and persist updates
   command = async (req, res) => {
     try {
@@ -202,6 +224,30 @@ class SessionController {
       }
     } catch (error) {
       logger.warn('Error adding file URLs to session data:', error.message);
+    }
+  };
+
+  // Get all active sessions (for session persistence)
+  getActiveSessions = async (req, res) => {
+    try {
+      const { sessionType } = req.query;
+      const result = await this.service.getActiveSessions(sessionType);
+      return res.status(result.statusCode).send(result.response);
+    } catch (e) {
+      logger.error(e);
+      return res.status(httpStatus.BAD_GATEWAY).send({ status: false, message: e.message });
+    }
+  };
+
+  // Unpair/deactivate a session
+  unpairSession = async (req, res) => {
+    try {
+      const sessionId = req.params.id;
+      const result = await this.service.unpairSession(sessionId);
+      return res.status(result.statusCode).send(result.response);
+    } catch (e) {
+      logger.error(e);
+      return res.status(httpStatus.BAD_GATEWAY).send({ status: false, message: e.message });
     }
   };
 }

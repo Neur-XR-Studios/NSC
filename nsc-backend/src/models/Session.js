@@ -36,6 +36,16 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       defaultValue: 'individual',
     },
+    is_active: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+    },
+    last_activity: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      defaultValue: DataTypes.NOW,
+    },
     start_time_ms: {
       type: DataTypes.BIGINT,
       allowNull: true,
@@ -59,6 +69,28 @@ module.exports = (sequelize, DataTypes) => {
     video_view_count: {
       type: DataTypes.INTEGER,
       allowNull: false,
+      defaultValue: 0,
+    },
+    started_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    paused_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    stopped_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    total_duration_ms: {
+      type: DataTypes.BIGINT,
+      allowNull: true,
+      defaultValue: 0,
+    },
+    pause_duration_ms: {
+      type: DataTypes.BIGINT,
+      allowNull: true,
       defaultValue: 0,
     },
   }, {

@@ -1,7 +1,7 @@
 const httpStatus = require('http-status');
 const { v4: uuidv4 } = require('uuid');
 const { Op } = require('sequelize');
-const { Session, VRDevice, ChairDevice, SessionParticipant, journey, JourneyAudioTrack } = require('../models');
+const { Session, VRDevice, ChairDevice, DevicePair, SessionParticipant, journey, JourneyAudioTrack } = require('../models');
 const mqttService = require('./MqttService');
 const logger = require('../config/logger');
 
@@ -87,7 +87,7 @@ class SessionService {
           language: null,
           joined_at: new Date(),
         };
-        
+
         logger.info(`[startSession] Creating participant for individual session ${session.id}:`, {
           vrDeviceId: vrDeviceId,
           chairDeviceId: chairDeviceId,
@@ -95,7 +95,7 @@ class SessionService {
           chairFound: !!chair,
           participantData
         });
-        
+
         const participant = await SessionParticipant.create(participantData);
         logger.info(`[startSession] Successfully created participant ${participant.id} for session ${session.id}`);
       } catch (e) {
@@ -105,6 +105,42 @@ class SessionService {
     }
 
     return { statusCode: httpStatus.OK, response: { status: true, data: session } };
+  }
+
+  /**
+   * Start a session from a device pair ID
+   * @param {Object} data - { pairId, journeyId?, journeyIds?, session_type? }
+   * @returns {Promise<Object>}
+   */
+  async startSessionFromPair({ pairId, journeyId, journeyIds, session_type = 'individual' }) {
+    if (!pairId) {
+      return { statusCode: httpStatus.BAD_REQUEST, response: { status: false, message: 'pairId is required' } };
+    }
+
+    // Find the device pair
+    const pair = await DevicePair.findByPk(pairId, {
+      include: [
+        { model: VRDevice, as: 'vr' },
+        { model: ChairDevice, as: 'chair' },
+      ],
+    });
+
+    if (!pair) {
+      return { statusCode: httpStatus.NOT_FOUND, response: { status: false, message: 'Device pair not found' } };
+    }
+
+    if (!pair.is_active) {
+      return { statusCode: httpStatus.BAD_REQUEST, response: { status: false, message: 'Device pair is inactive' } };
+    }
+
+    // Use the existing startSession method with the pair's device IDs
+    return await this.startSession({
+      vrDeviceId: pair.vr_device_id,
+      chairDeviceId: pair.chair_device_id,
+      journeyId,
+      journeyIds,
+      session_type,
+    });
   }
 
   /**
@@ -192,16 +228,16 @@ class SessionService {
     try {
       const ts = new Date().toISOString();
       const firstJourneyId = journeys && journeys.length > 0 ? journeys[0] : null;
-      
+
       for (const tgt of joinTargets) {
         // Include participant ID for this specific device pair
-        const payload = { 
+        const payload = {
           cmd: 'join_session',
-          sessionId: session.id, 
-          sessionType: 'group', 
+          sessionId: session.id,
+          sessionType: 'group',
           participantId: tgt.participantId,
           journeyId: firstJourneyId,
-          timestamp: ts 
+          timestamp: ts
         };
         if (tgt.vrHw) mqttService.publish(`devices/${tgt.vrHw}/commands/join_session`, payload, { qos: 1, retain: false });
         if (tgt.chairHw) mqttService.publish(`devices/${tgt.chairHw}/commands/join_session`, payload, { qos: 1, retain: false });
@@ -216,6 +252,42 @@ class SessionService {
   }
 
   /**
+   * Create a GROUP session from multiple device pair IDs
+   * @param {Object} data - { pairIds: string[], groupId?, journeyId?, journeyIds? }
+   * @returns {Promise<Object>}
+   */
+  async createGroupSessionFromPairs({ pairIds = [], groupId, journeyId, journeyIds }) {
+    if (!Array.isArray(pairIds) || pairIds.length === 0) {
+      return { statusCode: httpStatus.BAD_REQUEST, response: { status: false, message: 'pairIds array is required' } };
+    }
+
+    // Fetch all pairs
+    const pairs = await DevicePair.findAll({
+      where: { id: { [Op.in]: pairIds }, is_active: true },
+      include: [
+        { model: VRDevice, as: 'vr' },
+        { model: ChairDevice, as: 'chair' },
+      ],
+    });
+
+    if (pairs.length !== pairIds.length) {
+      return {
+        statusCode: httpStatus.BAD_REQUEST,
+        response: { status: false, message: 'Some pairs not found or inactive' },
+      };
+    }
+
+    // Convert pairs to members format for createGroupSession
+    const members = pairs.map(pair => ({
+      vrDeviceId: pair.vr_device_id,
+      chairDeviceId: pair.chair_device_id,
+      language: null,
+    }));
+
+    return await this.createGroupSession({ members, groupId, journeyId, journeyIds });
+  }
+
+  /**
    * Send a command to a session and persist session state updates
    */
   async commandAndUpdate({ sessionId, cmd, positionMs, durationMs, journeyId, language }) {
@@ -224,27 +296,70 @@ class SessionService {
 
     const session = await Session.findByPk(sessionId);
     if (session) {
+      const now = new Date();
       const nowMs = Date.now();
+
       switch (cmd) {
         case 'start':
-          await session.update({ status: 'running', start_time_ms: nowMs + 1500, last_command: 'start' });
+          // If resuming from pause, calculate pause duration
+          let pauseDurationMs = session.pause_duration_ms || 0;
+          if (session.paused_at && session.status === 'paused') {
+            const pauseStart = new Date(session.paused_at).getTime();
+            pauseDurationMs += (nowMs - pauseStart);
+          }
+
+          await session.update({
+            status: 'running',
+            start_time_ms: nowMs + 1500,
+            last_command: 'start',
+            started_at: session.started_at || now,
+            paused_at: null,
+            pause_duration_ms: pauseDurationMs,
+          });
           break;
+
         case 'pause':
-          await session.update({ status: 'paused', last_command: 'pause', last_position_ms: positionMs ?? session.last_position_ms });
+          await session.update({
+            status: 'paused',
+            last_command: 'pause',
+            last_position_ms: positionMs ?? session.last_position_ms,
+            paused_at: now,
+          });
           break;
+
         case 'seek':
-          await session.update({ last_command: 'seek', last_position_ms: positionMs ?? session.last_position_ms });
+          await session.update({
+            last_command: 'seek',
+            last_position_ms: positionMs ?? session.last_position_ms,
+          });
           break;
+
         case 'stop':
-          console.log('Stopping session 239', sessionId);
-          await session.update({ status: 'stopped', last_command: 'stop', overall_status: 'completed' });
+          // Calculate total duration
+          let totalDurationMs = 0;
+          if (session.started_at) {
+            const startTime = new Date(session.started_at).getTime();
+            totalDurationMs = nowMs - startTime - (session.pause_duration_ms || 0);
+          }
+
+          console.log('Stopping session', sessionId);
+          await session.update({
+            status: 'stopped',
+            last_command: 'stop',
+            overall_status: 'completed',
+            stopped_at: now,
+            total_duration_ms: totalDurationMs,
+          });
           break;
+
         case 'sync':
           await session.update({ last_command: 'sync' });
           break;
+
         case 'select_journey':
           await session.update({ last_command: 'select_journey' });
           break;
+
         default:
           break;
       }
@@ -738,7 +853,7 @@ class SessionService {
   // Create a participant (VR + Chair) for a session and announce join_session
   async addParticipant(sessionId, { vrDeviceId, chairDeviceId, language }) {
     logger.info(`[addParticipant] Adding participant to session ${sessionId}: vr=${vrDeviceId}, chair=${chairDeviceId}, lang=${language}`);
-    
+
     const errors = { missingFields: [], notFoundDevices: [] };
     if (!vrDeviceId) errors.missingFields.push('vrDeviceId');
     if (!chairDeviceId) errors.missingFields.push('chairDeviceId');
@@ -750,9 +865,9 @@ class SessionService {
 
     const vr = vrDeviceId ? await VRDevice.findByPk(vrDeviceId) || await VRDevice.findOne({ where: { deviceId: vrDeviceId } }) : null;
     const chair = chairDeviceId ? await ChairDevice.findByPk(chairDeviceId) || await ChairDevice.findOne({ where: { deviceId: chairDeviceId } }) : null;
-    
+
     logger.info(`[addParticipant] Device lookup results: vr=${!!vr}, chair=${!!chair}`);
-    
+
     if (!vr && vrDeviceId) {
       errors.notFoundDevices.push({ field: 'vrDeviceId', value: vrDeviceId });
       logger.warn(`[addParticipant] VR device not found: ${vrDeviceId}`);
@@ -774,7 +889,7 @@ class SessionService {
       language: language || null,
       joined_at: new Date(),
     };
-    
+
     logger.info(`[addParticipant] Creating participant:`, participantData);
     const participant = await SessionParticipant.create(participantData);
     logger.info(`[addParticipant] Successfully created participant ${participant.id}`);
@@ -786,13 +901,13 @@ class SessionService {
       // For group: send first journey ID if available
       const journeyIds = session.journey_ids || [];
       const firstJourneyId = Array.isArray(journeyIds) && journeyIds.length > 0 ? journeyIds[0] : null;
-      const payload = { 
+      const payload = {
         cmd: 'join_session',
-        sessionId: session.id, 
-        sessionType: session.session_type || 'individual', 
-        participantId: participant.id, 
+        sessionId: session.id,
+        sessionType: session.session_type || 'individual',
+        participantId: participant.id,
         journeyId: session.session_type === 'individual' ? null : firstJourneyId,
-        timestamp: ts 
+        timestamp: ts
       };
       if (vr?.deviceId) mqttService.publish(`devices/${vr.deviceId}/commands/join_session`, payload, { qos: 1, retain: false });
       if (chair?.deviceId) mqttService.publish(`devices/${chair.deviceId}/commands/join_session`, payload, { qos: 1, retain: false });
@@ -891,6 +1006,106 @@ class SessionService {
     }
 
     return { statusCode: httpStatus.OK, response: { status: true, data: { topic, payload } } };
+  }
+
+  /**
+   * Get all active sessions (for session persistence/restoration)
+   * @param {string} sessionType - Optional filter: 'individual' or 'group'
+   * @returns {Promise<Object>}
+   */
+  async getActiveSessions(sessionType = null) {
+    const where = { is_active: true };
+    if (sessionType) {
+      where.session_type = sessionType;
+    }
+
+    const sessions = await Session.findAll({
+      where,
+      include: [
+        { model: VRDevice, as: 'vr' },
+        { model: ChairDevice, as: 'chair' },
+        {
+          model: SessionParticipant, as: 'participants', include: [
+            { model: VRDevice, as: 'vr' },
+            { model: ChairDevice, as: 'chair' }
+          ]
+        },
+      ],
+      order: [['last_activity', 'DESC']],
+    });
+
+    return {
+      statusCode: httpStatus.OK,
+      response: {
+        status: true,
+        data: sessions.map(s => s.toJSON ? s.toJSON() : s),
+      },
+    };
+  }
+
+  /**
+   * Unpair/deactivate a session (mark as inactive instead of deleting)
+   * @param {string} sessionId
+   * @returns {Promise<Object>}
+   */
+  async unpairSession(sessionId) {
+    const session = await Session.findByPk(sessionId);
+    if (!session) {
+      return { statusCode: httpStatus.NOT_FOUND, response: { status: false, message: 'Session not found' } };
+    }
+
+    // Mark session as inactive
+    await session.update({
+      is_active: false,
+      status: 'stopped',
+      overall_status: 'completed',
+      stopped_at: new Date(),
+    });
+
+    // Send stop command to all participants
+    try {
+      const participants = await SessionParticipant.findAll({
+        where: { session_id: sessionId },
+        include: [
+          { model: VRDevice, as: 'vr' },
+          { model: ChairDevice, as: 'chair' }
+        ],
+      });
+
+      const payload = { cmd: 'stop', sessionId };
+      for (const p of participants) {
+        const vrHw = p.vr?.deviceId || null;
+        const chairHw = p.chair?.deviceId || null;
+        if (vrHw) {
+          mqttService.publish(`devices/${vrHw}/commands/stop`, payload, { qos: 1, retain: false });
+          try { global.io?.emit('mqtt_message', { topic: `devices/${vrHw}/commands/stop`, payload }); } catch { }
+        }
+        if (chairHw) {
+          mqttService.publish(`devices/${chairHw}/commands/stop`, payload, { qos: 1, retain: false });
+          try { global.io?.emit('mqtt_message', { topic: `devices/${chairHw}/commands/stop`, payload }); } catch { }
+        }
+      }
+    } catch (e) {
+      logger.warn(`[unpairSession] Failed to send stop commands for session ${sessionId}:`, e.message);
+    }
+
+    return { statusCode: httpStatus.OK, response: { status: true, message: 'Session unpaired successfully' } };
+  }
+
+  /**
+   * Update last_activity timestamp for a session
+   * @param {string} sessionId
+   * @returns {Promise<void>}
+   */
+  async updateActivity(sessionId) {
+    try {
+      await Session.update(
+        { last_activity: new Date() },
+        { where: { id: sessionId } }
+      );
+    } catch (e) {
+      logger.warn(`[updateActivity] Failed to update activity for session ${sessionId}:`, e.message);
+    }
   }
 }
 

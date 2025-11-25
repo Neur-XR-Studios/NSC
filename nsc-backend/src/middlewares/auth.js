@@ -24,6 +24,7 @@ const auth = (roles = []) => {
         })
             .then(() => {
                 // role-based authorization
+                console.log("User role:", req.user);
                 if (Array.isArray(roles) && roles.length > 0) {
                     const userRole = req.user.role;
                     if (!userRole || !roles.includes(userRole)) {

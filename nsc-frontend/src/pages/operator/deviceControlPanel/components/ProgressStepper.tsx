@@ -4,16 +4,17 @@ interface Props {
   currentStepNumber: number;
   connected: boolean;
   mode: "mqtt" | "bridge";
+  sessionType?: "individual" | "group" | null;
 }
 
-const steps = [
-  { key: "session-type", label: "Session Type" },
-  { key: "device-selection", label: "Select Devices" },
-  { key: "journey-selection", label: "Choose Journey" },
-  { key: "controller", label: "Control Session" },
-] as const;
-
-export default function ProgressStepper({ currentStepNumber, connected, mode }: Props) {
+export default function ProgressStepper({ currentStepNumber, connected, mode, sessionType }: Props) {
+  const steps = [
+    { key: "session-type", label: "Session Type" },
+    { key: "device-selection", label: "Select Devices" },
+    ...(sessionType === "individual" ? [] : [{ key: "journey-selection", label: "Choose Journey" }]),
+    { key: "controller", label: "Control Session" },
+  ] as const;
+  
   const modeLabel = mode === "mqtt" ? "MQTT" : "Bridge";
 
   return (
@@ -28,11 +29,7 @@ export default function ProgressStepper({ currentStepNumber, connected, mode }: 
               const isLast = idx === steps.length - 1;
 
               return (
-                <li
-                  key={s.key}
-                  className="relative flex-1"
-                  aria-current={isActive ? "step" : undefined}
-                >
+                <li key={s.key} className="relative flex-1" aria-current={isActive ? "step" : undefined}>
                   <div className="flex flex-col items-center">
                     {/* Circle */}
                     <div className="relative z-10 flex items-center justify-center">
@@ -57,11 +54,7 @@ export default function ProgressStepper({ currentStepNumber, connected, mode }: 
                     {/* Label */}
                     <span
                       className={`mt-3 text-xs sm:text-sm font-medium text-center px-2 transition-colors duration-300 ${
-                        isActive
-                          ? "text-cyan-400"
-                          : isCompleted
-                          ? "text-emerald-400"
-                          : "text-slate-500"
+                        isActive ? "text-cyan-400" : isCompleted ? "text-emerald-400" : "text-slate-500"
                       }`}
                     >
                       {s.label}
@@ -70,15 +63,10 @@ export default function ProgressStepper({ currentStepNumber, connected, mode }: 
 
                   {/* Connector Line */}
                   {!isLast && (
-                    <div
-                      className="absolute top-5 left-1/2 w-full h-0.5 -z-0"
-                      aria-hidden="true"
-                    >
+                    <div className="absolute top-5 left-1/2 w-full h-0.5 -z-0" aria-hidden="true">
                       <div
                         className={`h-full transition-all duration-500 ${
-                          isCompleted
-                            ? "bg-gradient-to-r from-emerald-500 to-emerald-400"
-                            : "bg-slate-800"
+                          isCompleted ? "bg-gradient-to-r from-emerald-500 to-emerald-400" : "bg-slate-800"
                         }`}
                       />
                     </div>
@@ -107,9 +95,7 @@ export default function ProgressStepper({ currentStepNumber, connected, mode }: 
             ) : (
               <WifiOff className="w-4 h-4" aria-hidden="true" />
             )}
-            <span className="text-sm font-semibold whitespace-nowrap">
-              {connected ? "Connected" : "Disconnected"}
-            </span>
+            <span className="text-sm font-semibold whitespace-nowrap">{connected ? "Connected" : "Disconnected"}</span>
           </div>
 
           {/* Mode Indicator */}
