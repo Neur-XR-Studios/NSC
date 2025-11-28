@@ -88,17 +88,14 @@ class PairingService {
           const MAX_RETRIES = 5;
           for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
             const newId = await this.nextId('vr', t);
-            const primaryId = (deviceId && deviceId.trim().length > 0)
-              ? deviceId
-              : newId;
             try {
               const autoDeviceId = (deviceId && deviceId.trim().length > 0)
                 ? deviceId
                 : newId.toLowerCase().replace('vr_', 'vr-');
               device = await VRDevice.create(
                 {
-                  id: primaryId,
-                  deviceId: autoDeviceId,
+                  id: newId,  // Always use generated ID as primary key (max 32 chars)
+                  deviceId: autoDeviceId,  // Use provided deviceId or generated one (max 128 chars)
                   display_name: metadata?.name ? `${metadata.name} (${newId})` : newId,  // Combine display name from metadata with device_id
                   metadata: metadata || null,
                   registeredAt: new Date()
@@ -126,17 +123,14 @@ class PairingService {
           const MAX_RETRIES = 5;
           for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
             const newId = await this.nextId('chair', t);
-            const primaryId = (deviceId && deviceId.trim().length > 0)
-              ? deviceId
-              : newId;
             try {
               const autoDeviceId = (deviceId && deviceId.trim().length > 0)
                 ? deviceId
                 : newId.toLowerCase().replace('chair_', 'chair-');
               device = await ChairDevice.create(
                 {
-                  id: primaryId,
-                  deviceId: autoDeviceId,
+                  id: newId,  // Always use generated ID as primary key (max 32 chars)
+                  deviceId: autoDeviceId,  // Use provided deviceId or generated one (max 128 chars)
                   display_name: metadata?.name ? `${metadata.name} (${newId})` : newId,  // Combine display name from metadata with device_id
                   metadata: metadata || null,
                   registeredAt: new Date()
@@ -221,16 +215,13 @@ class PairingService {
         device = await VRDevice.findOne({ where: { deviceId }, transaction: t });
         if (!device) {
           const newId = await this.nextId('vr', t);
-          const primaryId = (deviceId && deviceId.trim().length > 0)
-            ? deviceId
-            : newId;
           const autoDeviceId = (deviceId && deviceId.trim().length > 0)
             ? deviceId
             : newId.toLowerCase().replace('vr_', 'vr-');
           device = await VRDevice.create(
             {
-              id: primaryId,
-              deviceId: autoDeviceId,
+              id: newId,  // Always use generated ID as primary key (max 32 chars)
+              deviceId: autoDeviceId,  // Use provided deviceId or generated one (max 128 chars)
               display_name: newId,  // Set display_name to VR_#001 format
               metadata: metadata || null,
               registeredAt: new Date()
@@ -245,16 +236,13 @@ class PairingService {
         device = deviceId ? await ChairDevice.findOne({ where: { deviceId }, transaction: t }) : null;
         if (!device) {
           const newId = await this.nextId('chair', t);
-          const primaryId = (deviceId && deviceId.trim().length > 0)
-            ? deviceId
-            : newId;
           const autoDeviceId = (deviceId && deviceId.trim().length > 0)
             ? deviceId
             : newId.toLowerCase().replace('chair_', 'chair-');
           device = await ChairDevice.create(
             {
-              id: primaryId,
-              deviceId: autoDeviceId,
+              id: newId,  // Always use generated ID as primary key (max 32 chars)
+              deviceId: autoDeviceId,  // Use provided deviceId or generated one (max 128 chars)
               display_name: newId,  // Set display_name to CHAIR_#001 format
               metadata: metadata || null,
               registeredAt: new Date()
