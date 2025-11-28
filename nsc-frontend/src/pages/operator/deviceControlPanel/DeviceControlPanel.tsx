@@ -151,13 +151,20 @@ export default function DeviceControlPanel() {
     }
   }, [log]);
 
+  // ✅ Trigger device scan on mount to ensure online status is up-to-date
+  useEffect(() => {
+    api.post("devices/discover").catch((err) => {
+      console.error("Failed to trigger device scan:", err);
+    });
+  }, []);
+
   // Load ongoing sessions on initial mount to lock into controller if needed
   useEffect(() => {
     const loadOngoing = async () => {
       // Prevent loading if we've already loaded the initial session
       if (initialLoadRef.current) return;
       initialLoadRef.current = true;
-      
+
       try {
         const res = await api.get<SessionsEnvelope | { data?: SessionRec[] }>("sessions", { status: "on_going" });
         const root = res?.data as SessionsEnvelope | { data?: SessionRec[] } | undefined;
@@ -386,8 +393,8 @@ export default function DeviceControlPanel() {
                   rawStatus === "stopped" ||
                   rawStatus === "disconnect" ||
                   rawStatus === "disconnected"
-                ? "idle"
-                : rawStatus;
+                  ? "idle"
+                  : rawStatus;
             cur.online = ["active", "idle", "online", "connecting"].includes(status);
             cur.status = status || cur.status;
             // Update device type from status payload if provided
