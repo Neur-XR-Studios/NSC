@@ -72,7 +72,9 @@ class DevicePairService {
    * @returns {Promise<Array>}
    */
   async listPairs({ includeInactive = false } = {}) {
+    const deviceDiscoveryService = require('./DeviceDiscoveryService');
     const where = includeInactive ? {} : { is_active: true };
+    const onlineThreshold = new Date(Date.now() - 30 * 1000);
 
     const pairs = await DevicePair.findAll({
       where,
@@ -91,7 +93,24 @@ class DevicePairService {
       order: [['created_at', 'DESC']],
     });
 
-    return pairs;
+    // Add real-time online status to each pair
+    return pairs.map(pair => {
+      const vrOnlineRealtime = pair.vr?.deviceId ? deviceDiscoveryService.isDeviceOnline(pair.vr.deviceId) : false;
+      const chairOnlineRealtime = pair.chair?.deviceId ? deviceDiscoveryService.isDeviceOnline(pair.chair.deviceId) : false;
+
+      const vrOnlineDb = pair.vr?.lastSeenAt && new Date(pair.vr.lastSeenAt) > onlineThreshold;
+      const chairOnlineDb = pair.chair?.lastSeenAt && new Date(pair.chair.lastSeenAt) > onlineThreshold;
+
+      const vrOnline = vrOnlineRealtime || vrOnlineDb;
+      const chairOnline = chairOnlineRealtime || chairOnlineDb;
+
+      return {
+        ...pair.toJSON(),
+        vrOnline,
+        chairOnline,
+        bothOnline: vrOnline && chairOnline,
+      };
+    });
   }
 
   /**
@@ -235,10 +254,13 @@ class DevicePairService {
 
   /**
    * Get online pairs (where at least one device is online)
-   * A device is considered online if lastSeenAt is within the last 30 seconds
+   * A device is considered online if:
+   * 1. It's in DeviceDiscoveryService memory (real-time check), OR
+   * 2. lastSeenAt is within the last 30 seconds (database fallback)
    * @returns {Promise<Array>}
    */
   async getOnlinePairs() {
+    const deviceDiscoveryService = require('./DeviceDiscoveryService');
     const onlineThreshold = new Date(Date.now() - 30 * 1000); // 30 seconds ago
 
     const pairs = await DevicePair.findAll({
@@ -260,15 +282,31 @@ class DevicePairService {
 
     // Filter pairs where at least one device is online
     const onlinePairs = pairs.filter(pair => {
-      const vrOnline = pair.vr?.lastSeenAt && new Date(pair.vr.lastSeenAt) > onlineThreshold;
-      const chairOnline = pair.chair?.lastSeenAt && new Date(pair.chair.lastSeenAt) > onlineThreshold;
+      // Check real-time status first (most accurate)
+      const vrOnlineRealtime = pair.vr?.deviceId ? deviceDiscoveryService.isDeviceOnline(pair.vr.deviceId) : false;
+      const chairOnlineRealtime = pair.chair?.deviceId ? deviceDiscoveryService.isDeviceOnline(pair.chair.deviceId) : false;
+
+      // Fallback to database timestamp
+      const vrOnlineDb = pair.vr?.lastSeenAt && new Date(pair.vr.lastSeenAt) > onlineThreshold;
+      const chairOnlineDb = pair.chair?.lastSeenAt && new Date(pair.chair.lastSeenAt) > onlineThreshold;
+
+      // Device is online if either real-time or DB check passes
+      const vrOnline = vrOnlineRealtime || vrOnlineDb;
+      const chairOnline = chairOnlineRealtime || chairOnlineDb;
+
       return vrOnline || chairOnline;
     });
 
     // Add online status to each pair
     return onlinePairs.map(pair => {
-      const vrOnline = pair.vr?.lastSeenAt && new Date(pair.vr.lastSeenAt) > onlineThreshold;
-      const chairOnline = pair.chair?.lastSeenAt && new Date(pair.chair.lastSeenAt) > onlineThreshold;
+      const vrOnlineRealtime = pair.vr?.deviceId ? deviceDiscoveryService.isDeviceOnline(pair.vr.deviceId) : false;
+      const chairOnlineRealtime = pair.chair?.deviceId ? deviceDiscoveryService.isDeviceOnline(pair.chair.deviceId) : false;
+
+      const vrOnlineDb = pair.vr?.lastSeenAt && new Date(pair.vr.lastSeenAt) > onlineThreshold;
+      const chairOnlineDb = pair.chair?.lastSeenAt && new Date(pair.chair.lastSeenAt) > onlineThreshold;
+
+      const vrOnline = vrOnlineRealtime || vrOnlineDb;
+      const chairOnline = chairOnlineRealtime || chairOnlineDb;
 
       return {
         ...pair.toJSON(),

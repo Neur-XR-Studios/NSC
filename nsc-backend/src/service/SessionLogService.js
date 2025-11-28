@@ -42,6 +42,18 @@ class SessionLogService {
         limit: limitNum,
         offset: offset,
         order: [['created_at', 'DESC']],
+        include: [
+          {
+            model: this.dao.Model.sequelize.models.Session,
+            as: 'session',
+            include: [
+              {
+                model: this.dao.Model.sequelize.models.SessionFeedback,
+                as: 'feedbacks',
+              },
+            ],
+          },
+        ],
       });
       return responseHandler.returnSuccess(httpStatus.OK, 'Session logs fetched', {
         total: result.count,

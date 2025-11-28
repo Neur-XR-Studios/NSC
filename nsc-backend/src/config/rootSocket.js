@@ -189,8 +189,20 @@ const rootSocket = (io) => {
                         lastSeen: new Date(),
                         discoveredAt: new Date(),
                         isRegistered: false,
+                        online: true
                     });
                     deviceDiscoveryService.setupHeartbeatMonitoring(deviceId);
+                    // Emit device online event
+                    io.emit('device:online', {
+                        deviceId,
+                        type: deviceDiscoveryService.discoveredDevices.get(deviceId).type,
+                        name: deviceDiscoveryService.discoveredDevices.get(deviceId).name,
+                        metadata: {},
+                        isRegistered: false,
+                        lastSeen: new Date(),
+                        online: true
+                    });
+                    // Also emit discovered for backward compatibility
                     io.emit('device:discovered', {
                         deviceId,
                         type: deviceDiscoveryService.discoveredDevices.get(deviceId).type,
@@ -199,6 +211,11 @@ const rootSocket = (io) => {
                         isRegistered: false,
                         lastSeen: new Date(),
                     });
+                } else {
+                    // Update existing device to online
+                    existing.online = true;
+                    existing.lastSeen = new Date();
+                    deviceDiscoveryService.setupHeartbeatMonitoring(deviceId);
                 }
             } catch (e) {
                 console.error('Error handling device:identify', e);

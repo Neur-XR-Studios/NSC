@@ -680,8 +680,11 @@
       peerLastSeen: null,
       peerPositionMs: 0,
       syncOffset: 0, // milliseconds difference (positive = we're ahead)
+
       syncHealth: "unknown", // "good" | "warning" | "critical" | "unknown"
     };
+    let lastStatusUpdate = 0;
+    const STATUS_THROTTLE_MS = 1000; // Throttle status updates to 1s
     let player = null;
     let backendBaseUrl = "";
 
@@ -701,7 +704,13 @@
     function log(msg) {
       const el = document.getElementById("log");
       const ts = new Date().toLocaleTimeString();
-      el.textContent += `[${ts}] ${msg}\n`;
+      const div = document.createElement("div");
+      div.textContent = `[${ts}] ${msg}`;
+      el.appendChild(div);
+      // Limit logs to last 100 lines
+      while (el.childNodes.length > 100) {
+        el.removeChild(el.firstChild);
+      }
       el.scrollTop = el.scrollHeight;
       console.log(msg);
     }
@@ -1193,22 +1202,28 @@
         // Unity will use the language parameter to select the correct audio track
       }
       setK("s_pos", `Position: ${Math.max(0, Math.floor(state.positionMs))} ms`);
+
       // Also emit a status update
-      const statusPayload = {
-        deviceId: state.id,
-        type: state.type,
-        status: state.playing ? "active" : "idle",
-        positionMs: Math.floor(state.positionMs),
-        sessionId: state.sessionId || "",
-        timestamp: new Date().toISOString(),
-      };
-      pub(T_status(state.id), JSON.stringify(statusPayload), false);
+      // Throttled status update
+      const now = Date.now();
+      if (now - lastStatusUpdate > STATUS_THROTTLE_MS || !state.playing) {
+        const statusPayload = {
+          deviceId: state.id,
+          type: state.type,
+          status: state.playing ? "active" : "idle",
+          positionMs: Math.floor(state.positionMs),
+          sessionId: state.sessionId || "",
+          timestamp: new Date().toISOString(),
+        };
+        pub(T_status(state.id), JSON.stringify(statusPayload), false);
+        try {
+          if (bridge && connected) bridge.emit("device:status", statusPayload);
+        } catch { }
+        lastStatusUpdate = now;
+      }
       setTimeout(() => {
         isProcessingCommand = false;
       }, 100);
-      try {
-        if (bridge && connected) bridge.emit("device:status", statusPayload);
-      } catch { }
     }
 
     function startTicker() {

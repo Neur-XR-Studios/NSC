@@ -74,8 +74,7 @@ docker compose down
 ```
 - Delete all the tables:
 ```
-docker compose --env-file .env.docker exec mysql mysql -uroot -proot -e 
-"DROP DATABASE IF EXISTS nsc_db; CREATE DATABASE nsc_db;"
+docker exec nsc-mysql mysql -uroot -prootpass -e "DROP DATABASE IF EXISTS nsc; CREATE DATABASE nsc;"
 ```
 
 

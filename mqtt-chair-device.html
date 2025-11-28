@@ -640,8 +640,12 @@
             positionMs: 0,
             lastTick: 0,
             telemetryData: null,
+
             currentFrame: null,
+            lastFrameIndex: 0, // Optimization: Start search from last found frame
         };
+        let lastStatusUpdate = 0;
+        const STATUS_THROTTLE_MS = 1000; // Throttle status updates to 1s
         let backendBaseUrl = "";
 
         // Utils
@@ -660,7 +664,13 @@
         function log(msg) {
             const el = document.getElementById("log");
             const ts = new Date().toLocaleTimeString();
-            el.textContent += `[${ts}] ${msg}\n`;
+            const div = document.createElement("div");
+            div.textContent = `[${ts}] ${msg}`;
+            el.appendChild(div);
+            // Limit logs to last 100 lines
+            while (el.childNodes.length > 100) {
+                el.removeChild(el.firstChild);
+            }
             el.scrollTop = el.scrollHeight;
             console.log(msg);
         }
@@ -961,25 +971,44 @@
         function updateMotionFromTelemetry(positionMs) {
             if (!state.telemetryData || !state.telemetryData.frames) return;
 
-            // Find the appropriate telemetry frame based on position
             const frames = state.telemetryData.frames;
-            const currentFrame = frames.find((frame, index) => {
-                const nextFrame = frames[index + 1];
-                if (!nextFrame) return true; // Last frame
-                return positionMs >= frame.timestamp && positionMs < nextFrame.timestamp;
-            });
 
-            if (currentFrame) {
-                state.currentFrame = currentFrame;
-                setK("current_frame", `${frames.indexOf(currentFrame) + 1} / ${frames.length}`);
+            // Optimization: Start searching from lastFrameIndex
+            // Reset index if we jumped backwards
+            if (state.currentFrame && positionMs < state.currentFrame.timestamp) {
+                state.lastFrameIndex = 0;
+            }
 
-                // Update motion indicators
-                setK("motion_pitch", `${(currentFrame.pitch || 0).toFixed(1)}°`);
-                setK("motion_roll", `${(currentFrame.roll || 0).toFixed(1)}°`);
-                setK("motion_yaw", `${(currentFrame.yaw || 0).toFixed(1)}°`);
-                setK("motion_heave", `${(currentFrame.heave || 0).toFixed(1)}mm`);
-                setK("motion_surge", `${(currentFrame.surge || 0).toFixed(1)}mm`);
-                setK("motion_sway", `${(currentFrame.sway || 0).toFixed(1)}mm`);
+            let foundFrame = null;
+            // Linear search but starting from last known position (O(1) mostly)
+            for (let i = state.lastFrameIndex; i < frames.length; i++) {
+                const frame = frames[i];
+                const nextFrame = frames[i + 1];
+
+                if (positionMs >= frame.timestamp && (!nextFrame || positionMs < nextFrame.timestamp)) {
+                    foundFrame = frame;
+                    state.lastFrameIndex = i;
+                    break;
+                }
+
+                // If we've gone past the position (shouldn't happen if sorted, but safety check)
+                if (frame.timestamp > positionMs) {
+                    break;
+                }
+            }
+
+            if (foundFrame && foundFrame !== state.currentFrame) {
+                state.currentFrame = foundFrame;
+                // Use requestAnimationFrame for UI updates to avoid layout thrashing
+                requestAnimationFrame(() => {
+                    setK("current_frame", `${state.lastFrameIndex + 1} / ${frames.length}`);
+                    setK("motion_pitch", `${(foundFrame.pitch || 0).toFixed(1)}°`);
+                    setK("motion_roll", `${(foundFrame.roll || 0).toFixed(1)}°`);
+                    setK("motion_yaw", `${(foundFrame.yaw || 0).toFixed(1)}°`);
+                    setK("motion_heave", `${(foundFrame.heave || 0).toFixed(1)}mm`);
+                    setK("motion_surge", `${(foundFrame.surge || 0).toFixed(1)}mm`);
+                    setK("motion_sway", `${(foundFrame.sway || 0).toFixed(1)}mm`);
+                });
             }
         }
 
@@ -1044,16 +1073,24 @@
             setK("s_pos", `${min}:${s.toString().padStart(2, "0")}`);
 
             // Also emit a status update
-            const statusPayload = {
-                deviceId: state.id,
-                type: state.type,
-                status: state.playing ? "active" : "idle",
-                positionMs: Math.floor(state.positionMs),
-                sessionId: state.sessionId || "",
-                journeyId: state.journeyId || "",
-                timestamp: new Date().toISOString(),
-            };
-            pub(T_status(state.id), JSON.stringify(statusPayload), false);
+            // Throttled status update
+            const now = Date.now();
+            if (now - lastStatusUpdate > STATUS_THROTTLE_MS || !state.playing) {
+                const statusPayload = {
+                    deviceId: state.id,
+                    type: state.type,
+                    status: state.playing ? "active" : "idle",
+                    positionMs: Math.floor(state.positionMs),
+                    sessionId: state.sessionId || "",
+                    journeyId: state.journeyId || "",
+                    timestamp: new Date().toISOString(),
+                };
+                pub(T_status(state.id), JSON.stringify(statusPayload), false);
+                try {
+                    if (bridge && connected) bridge.emit("device:status", statusPayload);
+                } catch { }
+                lastStatusUpdate = now;
+            }
             try {
                 if (bridge && connected) bridge.emit("device:status", statusPayload);
             } catch { }

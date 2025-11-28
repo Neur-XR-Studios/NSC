@@ -104,6 +104,7 @@ module.exports = (sequelize, DataTypes) => {
     Session.belongsTo(models.ChairDevice, { foreignKey: 'chair_device_id', as: 'chair' });
     Session.hasMany(models.SessionLog, { foreignKey: 'session_id', as: 'logs' });
     Session.hasMany(models.SessionParticipant, { foreignKey: 'session_id', as: 'participants' });
+    Session.hasMany(models.SessionFeedback, { foreignKey: 'session_id', as: 'feedbacks' });
   };
 
   return Session;

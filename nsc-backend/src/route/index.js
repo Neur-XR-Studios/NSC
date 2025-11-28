@@ -9,6 +9,8 @@ const deviceRoute = require('./deviceRoute');
 const devicePairRoute = require('./devicePairRoute');
 const sessionRoute = require('./sessionRoute');
 const sessionLogRoute = require('./sessionLogRoute');
+const sessionFeedbackRoute = require('./sessionFeedbackRoute');
+const analyticsRoute = require('./analyticsRoute');
 const router = express.Router();
 
 const defaultRoutes = [
@@ -51,6 +53,14 @@ const defaultRoutes = [
     {
         path: '/session-logs',
         route: sessionLogRoute,
+    },
+    {
+        path: '/session-feedbacks',
+        route: sessionFeedbackRoute,
+    },
+    {
+        path: '/analytics',
+        route: analyticsRoute,
     },
 ];
 

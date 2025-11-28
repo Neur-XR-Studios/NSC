@@ -15,6 +15,7 @@ import Users from './pages/admin/users/Users'
 import Devices from './pages/admin/devices/Devices'
 import DeviceControlPanel from './pages/operator/deviceControlPanel/DeviceControlPanel'
 import Sessions from './pages/admin/sessions/Sessions'
+import Analytics from './pages/admin/analytics/Analytics'
 
 function App() {
   useAuthStore((s) => s.isAuthenticated)
@@ -35,16 +36,17 @@ function App() {
         <Route element={<RoleBasedRoute roles={["admin"]} />}>
           <Route path="/admin" element={<AdminLayout />}>
             <Route index element={<Admin />} />
-          <Route path="/admin/assets" element={<Assets />} />
-          <Route path="/admin/users" element={<Users />} />
-          <Route path="/admin/devices" element={<Devices />} />
-          <Route path="/admin/sessions" element={<Sessions />} />
+            <Route path="/admin/assets" element={<Assets />} />
+            <Route path="/admin/users" element={<Users />} />
+            <Route path="/admin/devices" element={<Devices />} />
+            <Route path="/admin/sessions" element={<Sessions />} />
+            <Route path="/admin/analytics" element={<Analytics />} />
           </Route>
         </Route>
         <Route element={<RoleBasedRoute roles={["operator"]} />}>
           <Route path="/operator" element={<OperatorLayout />}>
             <Route index element={<Operator />} />
-          <Route path="/operator/device-control-panel" element={<DeviceControlPanel />} />
+            <Route path="/operator/device-control-panel" element={<DeviceControlPanel />} />
           </Route>
         </Route>
       </Route>

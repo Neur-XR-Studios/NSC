@@ -324,15 +324,15 @@ export default function DeviceSelectionStep({
                       <div className="flex items-center gap-2">
                         <Monitor className={`w-4 h-4 ${pair.vrOnline ? "text-green-500" : "text-gray-400"}`} />
                         <div className="flex-1 text-sm">
-                          <div className="font-medium">VR: {pair.vr?.id || "N/A"}</div>
-                          <div className="text-xs text-muted-foreground truncate">{pair.vr?.deviceId}</div>
+                          <div className="font-medium">VR: {pair.vr?.display_name || pair.vr?.id || "N/A"}</div>
+                          <div className="text-xs text-muted-foreground truncate">{pair.vr?.id}</div>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
                         <Armchair className={`w-4 h-4 ${pair.chairOnline ? "text-green-500" : "text-gray-400"}`} />
                         <div className="flex-1 text-sm">
-                          <div className="font-medium">Chair: {pair.chair?.id || "N/A"}</div>
-                          <div className="text-xs text-muted-foreground truncate">{pair.chair?.deviceId}</div>
+                          <div className="font-medium">Chair: {pair.chair?.display_name || pair.chair?.id || "N/A"}</div>
+                          <div className="text-xs text-muted-foreground truncate">{pair.chair?.id}</div>
                         </div>
                       </div>
                     </div>

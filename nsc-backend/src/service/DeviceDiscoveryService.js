@@ -37,42 +37,55 @@ class DeviceDiscoveryService {
         return;
       }
 
-      // Store discovered device info
+      const now = new Date();
+
+      // Store discovered device info in memory
       this.discoveredDevices.set(deviceId, {
         deviceId,
         type,
         name: name || `${type.toUpperCase()} Device`,
         metadata: metadata || {},
-        lastSeen: new Date(),
-        discoveredAt: timestamp ? new Date(timestamp) : new Date(),
+        lastSeen: now,
+        discoveredAt: timestamp ? new Date(timestamp) : now,
         isRegistered: false,
         online: true
       });
 
-      // Check if device is already registered
+      // Check if device is already registered and update database
       const Model = type === 'vr' ? VRDevice : ChairDevice;
       const existingDevice = await Model.findOne({ where: { deviceId } });
 
       if (existingDevice) {
         // Update last seen time for registered devices
-        await existingDevice.update({ lastSeenAt: new Date() });
+        await existingDevice.update({ lastSeenAt: now });
         this.discoveredDevices.get(deviceId).isRegistered = true;
         logger.info('[DeviceDiscovery] Registered device announced', { deviceId, type });
       } else {
-        logger.info('[DeviceDiscovery] New device discovered', { deviceId, type });
+        logger.info('[DeviceDiscovery] New device discovered (unregistered)', { deviceId, type });
       }
 
       // Setup heartbeat monitoring
       this.setupHeartbeatMonitoring(deviceId);
 
-      // Emit to connected clients via Socket.IO
+      // Emit device online event to connected clients
+      global.io?.emit('device:online', {
+        deviceId,
+        type,
+        name,
+        metadata,
+        isRegistered: this.discoveredDevices.get(deviceId).isRegistered,
+        lastSeen: now,
+        online: true
+      });
+
+      // Also emit discovered event for backward compatibility
       global.io?.emit('device:discovered', {
         deviceId,
         type,
         name,
         metadata,
         isRegistered: this.discoveredDevices.get(deviceId).isRegistered,
-        lastSeen: new Date()
+        lastSeen: now
       });
 
     } catch (error) {
@@ -87,6 +100,7 @@ class DeviceDiscoveryService {
     try {
       const deviceId = topic.split('/')[1]; // Extract deviceId from topic
       const data = JSON.parse(payload.toString());
+      const now = new Date();
 
       let device = this.discoveredDevices.get(deviceId);
       if (!device) {
@@ -94,17 +108,18 @@ class DeviceDiscoveryService {
         device = {
           deviceId,
           type: data?.type && ['vr', 'chair'].includes(data.type) ? data.type : 'unknown',
-          name: 'Device',
+          name: data?.name || 'Device',
           metadata: {},
-          lastSeen: new Date(),
-          discoveredAt: new Date(),
+          lastSeen: now,
+          discoveredAt: now,
           isRegistered: false,
+          online: true
         };
         this.discoveredDevices.set(deviceId, device);
         // Start heartbeat monitoring for new device
         this.setupHeartbeatMonitoring(deviceId);
-        // Notify clients a device has been discovered even if type is unknown
-        global.io?.emit('device:discovered', {
+        // Notify clients a device has been discovered
+        global.io?.emit('device:online', {
           deviceId,
           type: device.type,
           name: device.name,
@@ -114,17 +129,22 @@ class DeviceDiscoveryService {
           online: true,
         });
       } else {
-        device.lastSeen = new Date();
+        device.lastSeen = now;
         device.online = true;
       }
 
-      // Update database for registered devices
-      if (device.isRegistered && (device.type === 'vr' || device.type === 'chair')) {
+      // Always update database for known device types, even if not registered
+      // This ensures lastSeenAt is always current
+      if (device.type === 'vr' || device.type === 'chair') {
         const Model = device.type === 'vr' ? VRDevice : ChairDevice;
-        await Model.update(
-          { lastSeenAt: new Date() },
-          { where: { deviceId } }
-        );
+        const existingDevice = await Model.findOne({ where: { deviceId } });
+
+        if (existingDevice) {
+          // Update existing device
+          await existingDevice.update({ lastSeenAt: now });
+          device.isRegistered = true;
+        }
+        // Note: We don't auto-create devices here, they must be registered first
       }
 
       // Reset heartbeat timer
@@ -133,7 +153,8 @@ class DeviceDiscoveryService {
       // Emit heartbeat to clients
       global.io?.emit('device:heartbeat', {
         deviceId,
-        timestamp: new Date(),
+        timestamp: now,
+        online: true,
         data
       });
     } catch (error) {
@@ -283,6 +304,29 @@ class DeviceDiscoveryService {
     logger.info('[DeviceDiscovery] Command sent', { deviceId, command, requestId: message.requestId });
 
     return message.requestId;
+  }
+
+  /**
+   * Check if a device is currently online (based on memory state)
+   * @param {string} deviceId
+   * @returns {boolean}
+   */
+  isDeviceOnline(deviceId) {
+    const device = this.discoveredDevices.get(deviceId);
+    return device ? device.online === true : false;
+  }
+
+  /**
+   * Get online status for multiple devices
+   * @param {string[]} deviceIds
+   * @returns {Object} Map of deviceId -> boolean
+   */
+  getDevicesOnlineStatus(deviceIds) {
+    const status = {};
+    for (const deviceId of deviceIds) {
+      status[deviceId] = this.isDeviceOnline(deviceId);
+    }
+    return status;
   }
 
   /**

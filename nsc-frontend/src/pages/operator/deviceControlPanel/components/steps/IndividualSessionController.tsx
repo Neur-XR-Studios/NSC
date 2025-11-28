@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -10,9 +10,11 @@ import {
   getSessionById,
   addParticipant as apiAddParticipant,
   removeParticipant as apiRemoveParticipant,
+  submitSessionFeedback,
   type SessionDetailsEnvelope,
 } from "@/lib/sessions";
 import type { BaseControllerProps } from "./types";
+import { SessionFeedbackModal } from "@/components/SessionFeedbackModal";
 
 export default function IndividualSessionController({
   activePair,
@@ -45,8 +47,8 @@ export default function IndividualSessionController({
       (Array.isArray(activePair?.journeyId)
         ? activePair?.journeyId
         : activePair?.journeyId
-        ? [activePair?.journeyId]
-        : []) as number[],
+          ? [activePair?.journeyId]
+          : []) as number[],
     [activePair?.journeyId],
   );
   const journeyCards = useMemo(
@@ -83,6 +85,7 @@ export default function IndividualSessionController({
   const [selectedChairId, setSelectedChairId] = useState("");
   const [showPairModal, setShowPairModal] = useState(false);
   const [selectedJourneyDetail, setSelectedJourneyDetail] = useState<JourneyItem | null>(null);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
 
   // Filter out already paired devices
   const pairedVrIds = useMemo(() => new Set(sessionPairs.map((p) => p.vrId)), [sessionPairs]);
@@ -218,6 +221,72 @@ export default function IndividualSessionController({
     if (Object.keys(updatesSelected).length) setSelectedJourneyByPair((prev) => ({ ...prev, ...updatesSelected }));
     if (Object.keys(updatesAudio).length) setAudioSel((prev) => ({ ...prev, ...updatesAudio }));
   }, [deviceInfoById, sessionPairs, selectedJourneyByPair, journeys]);
+
+  // Memoized feedback modal callbacks to prevent infinite loop
+  const handleFeedbackSubmit = useCallback(async (rating: number, feedbackText: string) => {
+    if (!activePair) return;
+    const sid = activePair.sessionId;
+
+    try {
+      // Submit feedback
+      await submitSessionFeedback(sid, rating, feedbackText);
+
+      // Stop session
+      sendCmd(sid, "stop");
+
+      // Clean up state
+      try {
+        setPairs?.((prev) => prev.filter((p) => p.sessionId !== sid));
+      } catch (e) {
+        void e;
+      }
+      try {
+        setParticipantIdByPair({});
+        setSelectedJourneyByPair({});
+        setAudioSel({});
+        if (sid) setSeekValues((prev) => ({ ...prev, [sid]: 0 }));
+      } catch (e) {
+        void e;
+      }
+
+      // Close modal and navigate
+      setShowFeedbackModal(false);
+      onNewSession();
+    } catch (error) {
+      console.error("Failed to submit feedback:", error);
+      // Still stop session even if feedback fails
+      sendCmd(sid, "stop");
+      setShowFeedbackModal(false);
+      onNewSession();
+    }
+  }, [activePair, sendCmd, setPairs, setSeekValues, onNewSession]);
+
+  const handleFeedbackSkip = useCallback(() => {
+    if (!activePair) return;
+    const sid = activePair.sessionId;
+
+    // Stop session without feedback
+    sendCmd(sid, "stop");
+
+    // Clean up state
+    try {
+      setPairs?.((prev) => prev.filter((p) => p.sessionId !== sid));
+    } catch (e) {
+      void e;
+    }
+    try {
+      setParticipantIdByPair({});
+      setSelectedJourneyByPair({});
+      setAudioSel({});
+      if (sid) setSeekValues((prev) => ({ ...prev, [sid]: 0 }));
+    } catch (e) {
+      void e;
+    }
+
+    setShowFeedbackModal(false);
+    onNewSession();
+  }, [activePair, sendCmd, setPairs, setSeekValues, onNewSession]);
+
   return (
     <div className="space-y-6">
       <Card className="bg-slate-900/50 border-slate-800">
@@ -264,25 +333,7 @@ export default function IndividualSessionController({
             <Button
               onClick={() => {
                 if (!activePair) return;
-                const sid = activePair.sessionId;
-                // Send stop to backend
-                sendCmd(sid, "stop");
-                // Immediately unpair all devices from this session locally to avoid stale reloads
-                try {
-                  setPairs?.((prev) => prev.filter((p) => p.sessionId !== sid));
-                } catch (e) {
-                  void e;
-                }
-                try {
-                  setParticipantIdByPair({});
-                  setSelectedJourneyByPair({});
-                  setAudioSel({});
-                  if (sid) setSeekValues((prev) => ({ ...prev, [sid]: 0 }));
-                } catch (e) {
-                  void e;
-                }
-                // Navigate back to new session flow
-                onNewSession();
+                setShowFeedbackModal(true);
               }}
               variant="destructive"
               className="gap-2 text-base font-semibold"
@@ -310,8 +361,8 @@ export default function IndividualSessionController({
                     typeof vrInfo?.positionMs === "number" && isFinite(vrInfo.positionMs)
                       ? vrInfo.positionMs
                       : typeof chairInfo?.positionMs === "number" && isFinite(chairInfo.positionMs)
-                      ? chairInfo.positionMs
-                      : undefined;
+                        ? chairInfo.positionMs
+                        : undefined;
                   const currentJid =
                     deviceJourneyId ??
                     selectedJourneyByPair[key] ??
@@ -380,9 +431,9 @@ export default function IndividualSessionController({
                               if (playing) {
                                 // Include current position to ensure resume on devices that require it
                                 const currentMs =
-                                typeof devicePositionMs === "number" && isFinite(devicePositionMs)
-                                ? devicePositionMs
-                                : playerRefs.current[key]?.getCurrentTimeMs() || 0;
+                                  typeof devicePositionMs === "number" && isFinite(devicePositionMs)
+                                    ? devicePositionMs
+                                    : playerRefs.current[key]?.getCurrentTimeMs() || 0;
                                 console.log("Play", { vrId: p.vrId, chairId: p.chairId }, "play", currentMs);
                                 sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "play", currentMs);
                               } else {
@@ -422,11 +473,10 @@ export default function IndividualSessionController({
                               {p.vrId}
                             </span>
                             <span
-                              className={`rounded-full  ${
-                                vrOnline
-                                  ? "text-emerald-500 bg-emerald-500 animate-pulse"
-                                  : "text-red-500 bg-red-500 animate-ping"
-                              }`}
+                              className={`rounded-full  ${vrOnline
+                                ? "text-emerald-500 bg-emerald-500 animate-pulse"
+                                : "text-red-500 bg-red-500 animate-ping"
+                                }`}
                             >
                               <Dot className="w-4 h-4" />
                             </span>
@@ -438,11 +488,10 @@ export default function IndividualSessionController({
                               {p.chairId}
                             </span>
                             <span
-                              className={`rounded-full ${
-                                chairOnline
-                                  ? "text-emerald-500 bg-emerald-500 animate-pulse"
-                                  : "text-red-500 bg-red-500 animate-ping"
-                              }`}
+                              className={`rounded-full ${chairOnline
+                                ? "text-emerald-500 bg-emerald-500 animate-pulse"
+                                : "text-red-500 bg-red-500 animate-ping"
+                                }`}
                             >
                               <Dot className="w-4 h-4" />
                             </span>
@@ -621,15 +670,14 @@ export default function IndividualSessionController({
                                   const isSelected = Number(currentJid) === Number(jc.jid);
                                   const thumb = jc.item.video?.thumbnail_url;
                                   const title = jc.item.journey?.title || jc.item.video?.title || "Untitled";
-                                  
+
                                   return (
                                     <div
                                       key={`${key}-jc-${jc.jid}`}
-                                      className={`flex-shrink-0 group relative rounded-lg overflow-hidden cursor-pointer transition-all border-2 ${
-                                        isSelected
-                                          ? "border-cyan-500 shadow-lg shadow-cyan-500/30"
-                                          : "border-slate-700 hover:border-slate-600"
-                                      }`}
+                                      className={`flex-shrink-0 group relative rounded-lg overflow-hidden cursor-pointer transition-all border-2 ${isSelected
+                                        ? "border-cyan-500 shadow-lg shadow-cyan-500/30"
+                                        : "border-slate-700 hover:border-slate-600"
+                                        }`}
                                       onClick={() => {
                                         const pid = participantIdByPair[key];
                                         if (!pid || !activePair?.sessionId) return;
@@ -677,7 +725,7 @@ export default function IndividualSessionController({
                                             className="w-full h-full object-cover"
                                           />
                                         )}
-                                        
+
                                         {/* Overlay with Eye Button */}
                                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
                                           <button
@@ -910,11 +958,10 @@ export default function IndividualSessionController({
                             key={d.id}
                             type="button"
                             onClick={() => setSelectedVrId(d.id)}
-                            className={`w-full text-left border rounded-lg p-2 transition-all ${
-                              selected
-                                ? "border-purple-500 bg-purple-500/10 ring-2 ring-purple-500/20"
-                                : "border-slate-700 bg-slate-800/40 hover:bg-slate-800 hover:border-slate-600"
-                            }`}
+                            className={`w-full text-left border rounded-lg p-2 transition-all ${selected
+                              ? "border-purple-500 bg-purple-500/10 ring-2 ring-purple-500/20"
+                              : "border-slate-700 bg-slate-800/40 hover:bg-slate-800 hover:border-slate-600"
+                              }`}
                           >
                             <div className="flex items-center justify-between">
                               <div>
@@ -955,11 +1002,10 @@ export default function IndividualSessionController({
                             key={d.id}
                             type="button"
                             onClick={() => setSelectedChairId(d.id)}
-                            className={`w-full text-left border rounded-lg p-2 transition-all ${
-                              selected
-                                ? "border-cyan-500 bg-cyan-500/10 ring-2 ring-cyan-500/20"
-                                : "border-slate-700 bg-slate-800/40 hover:bg-slate-800 hover:border-slate-600"
-                            }`}
+                            className={`w-full text-left border rounded-lg p-2 transition-all ${selected
+                              ? "border-cyan-500 bg-cyan-500/10 ring-2 ring-cyan-500/20"
+                              : "border-slate-700 bg-slate-800/40 hover:bg-slate-800 hover:border-slate-600"
+                              }`}
                           >
                             <div className="flex items-center justify-between">
                               <div>
@@ -1122,6 +1168,15 @@ export default function IndividualSessionController({
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Session Feedback Modal */}
+      <SessionFeedbackModal
+        open={showFeedbackModal}
+        onOpenChange={setShowFeedbackModal}
+        sessionId={activePair?.sessionId || ""}
+        onSubmit={handleFeedbackSubmit}
+        onSkip={handleFeedbackSkip}
+      />
     </div>
   );
 }

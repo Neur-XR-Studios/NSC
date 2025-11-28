@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -17,8 +17,9 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import type { JourneyItem } from "@/types/journey";
 import { VideoPlayer, type VideoPlayerHandle } from "@/components/media/VideoPlayer";
-import { commandSession } from "@/lib/sessions";
+import { commandSession, submitSessionFeedback } from "@/lib/sessions";
 import type { BaseControllerProps } from "./types";
+import { SessionFeedbackModal } from "@/components/SessionFeedbackModal";
 
 export default function GroupSessionController({
   activePair,
@@ -29,6 +30,7 @@ export default function GroupSessionController({
   onNewSession,
   onResendSession,
   pairs = [],
+  setPairs,
   onlineById = {},
   deviceInfoById = {},
   sessionOfflineDevices,
@@ -43,6 +45,72 @@ export default function GroupSessionController({
   const playerRefs = useRef<Record<string, VideoPlayerHandle | null>>({});
   const didInitRef = useRef(false);
 
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+
+  // Memoized feedback modal callbacks
+  const handleFeedbackSubmit = useCallback(
+    async (rating: number, feedbackText: string) => {
+      if (!activePair) return;
+      const sid = activePair.sessionId;
+
+      try {
+        // Submit feedback
+        await submitSessionFeedback(sid, rating, feedbackText);
+
+        // Stop session
+        sendCmd(sid, "stop");
+
+        // Clean up state
+        try {
+          setPairs?.((prev) => prev.filter((p) => p.sessionId !== sid));
+        } catch (e) {
+          void e;
+        }
+        try {
+          setAudioSel({});
+          if (sid) setSeekValues((prev) => ({ ...prev, [sid]: 0 }));
+        } catch (e) {
+          void e;
+        }
+
+        // Close modal and navigate
+        setShowFeedbackModal(false);
+        onNewSession();
+      } catch (error) {
+        console.error("Failed to submit feedback:", error);
+        // Still stop session even if feedback fails
+        sendCmd(sid, "stop");
+        setShowFeedbackModal(false);
+        onNewSession();
+      }
+    },
+    [activePair, sendCmd, setPairs, setSeekValues, onNewSession],
+  );
+
+  const handleFeedbackSkip = useCallback(() => {
+    if (!activePair) return;
+    const sid = activePair.sessionId;
+
+    // Stop session without feedback
+    sendCmd(sid, "stop");
+
+    // Clean up state
+    try {
+      setPairs?.((prev) => prev.filter((p) => p.sessionId !== sid));
+    } catch (e) {
+      void e;
+    }
+    try {
+      setAudioSel({});
+      if (sid) setSeekValues((prev) => ({ ...prev, [sid]: 0 }));
+    } catch (e) {
+      void e;
+    }
+
+    setShowFeedbackModal(false);
+    onNewSession();
+  }, [activePair, sendCmd, setPairs, setSeekValues, onNewSession]);
+
   // Collect all pairs in the same session for display
   const sessionPairs = useMemo(
     () => (activePair ? pairs.filter((p) => p.sessionId && p.sessionId === activePair.sessionId) : []),
@@ -54,8 +122,8 @@ export default function GroupSessionController({
       (Array.isArray(activePair?.journeyId)
         ? activePair?.journeyId
         : activePair?.journeyId
-          ? [activePair?.journeyId]
-          : []) as number[],
+        ? [activePair?.journeyId]
+        : []) as number[],
     [activePair?.journeyId],
   );
 
@@ -182,8 +250,8 @@ export default function GroupSessionController({
         Array.isArray(activePair?.journeyId)
           ? activePair?.journeyId
           : activePair?.journeyId
-            ? [activePair?.journeyId]
-            : []
+          ? [activePair?.journeyId]
+          : []
       ) as number[];
       sessionPairs.forEach((sp) => {
         const key = `${sp.vrId}-${sp.chairId}`;
@@ -238,10 +306,7 @@ export default function GroupSessionController({
             <Button
               onClick={() => {
                 if (!activePair) return;
-                const sid = activePair.sessionId;
-                sendCmd(sid, "stop");
-                if (sid) setSeekValues((prev) => ({ ...prev, [sid]: 0 }));
-                onNewSession();
+                setShowFeedbackModal(true);
               }}
               variant="destructive"
               className="gap-2 text-base font-semibold"
@@ -479,8 +544,8 @@ export default function GroupSessionController({
                     idx < currentJourneyIdx
                       ? "px-2 py-1 rounded bg-emerald-700 text-white text-xs"
                       : idx === currentJourneyIdx
-                        ? "px-2 py-1 rounded bg-cyan-700 text-white text-xs"
-                        : "px-2 py-1 rounded bg-slate-700 text-white text-xs"
+                      ? "px-2 py-1 rounded bg-cyan-700 text-white text-xs"
+                      : "px-2 py-1 rounded bg-slate-700 text-white text-xs"
                   }
                   title={String(jc.jid)}
                 >
@@ -513,7 +578,7 @@ export default function GroupSessionController({
                     setIsSessionPlaying(false);
                     setCurrentJourneyIdx(nextIdx);
                     setSeekValues((prev) => ({ ...prev, [activePair.sessionId]: 0 }));
-                    commandSession(activePair.sessionId, "select_journey", { journeyId: target.jid }).catch(() => { });
+                    commandSession(activePair.sessionId, "select_journey", { journeyId: target.jid }).catch(() => {});
                   }
                 }
               }}
@@ -609,10 +674,11 @@ export default function GroupSessionController({
                               {p.vrId}
                             </span>
                             <span
-                              className={`rounded-full ${vrOnline
-                                ? "text-emerald-500 bg-emerald-500 animate-pulse"
-                                : "text-red-500 bg-red-500 animate-ping"
-                                }`}
+                              className={`rounded-full ${
+                                vrOnline
+                                  ? "text-emerald-500 bg-emerald-500 animate-pulse"
+                                  : "text-red-500 bg-red-500 animate-ping"
+                              }`}
                             >
                               <Dot className="w-4 h-4" />
                             </span>
@@ -624,10 +690,11 @@ export default function GroupSessionController({
                               {p.chairId}
                             </span>
                             <span
-                              className={`rounded-full ${chairOnline
-                                ? "text-emerald-500 bg-emerald-500 animate-pulse"
-                                : "text-red-500 bg-red-500 animate-ping"
-                                }`}
+                              className={`rounded-full ${
+                                chairOnline
+                                  ? "text-emerald-500 bg-emerald-500 animate-pulse"
+                                  : "text-red-500 bg-red-500 animate-ping"
+                              }`}
                             >
                               <Dot className="w-4 h-4" />
                             </span>
@@ -670,6 +737,13 @@ export default function GroupSessionController({
           )}
         </CardContent>
       </Card>
+      <SessionFeedbackModal
+        open={showFeedbackModal}
+        onOpenChange={setShowFeedbackModal}
+        sessionId={activePair?.sessionId || ""}
+        onSubmit={handleFeedbackSubmit}
+        onSkip={handleFeedbackSkip}
+      />
     </div>
   );
 }
