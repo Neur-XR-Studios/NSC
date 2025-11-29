@@ -2,7 +2,13 @@ import type { JourneyItem } from "@/types/journey";
 
 export type ActivePair = { sessionId: string; vrId: string; chairId: string; journeyId?: number[] } | null;
 export type Pair = { sessionId: string; vrId: string; chairId: string; journeyId?: number[] };
-export type Device = { id: string; name: string; online: boolean; type?: string };
+export type Device = { 
+  id: string; 
+  name: string; 
+  online: boolean; 
+  type?: string; 
+  deviceId?: string; // Hardware device ID for MQTT communication
+};
 
 export interface BaseControllerProps {
   activePair: ActivePair;

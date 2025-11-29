@@ -148,7 +148,7 @@ export default function DeviceSelectionStep({
   // Helper to check if device is online based on lastSeenAt
   const isDeviceOnline = (lastSeenAt?: string) => {
     if (!lastSeenAt) return false;
-    const threshold = 30 * 1000; // 30 seconds
+    const threshold = 60 * 1000; // 60 seconds - increased from 30s to prevent blinking (backend timeout is 45s)
     return Date.now() - new Date(lastSeenAt).getTime() < threshold;
   };
 

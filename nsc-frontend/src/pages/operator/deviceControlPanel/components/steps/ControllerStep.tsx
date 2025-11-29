@@ -22,17 +22,27 @@ export default function ControllerStep(props: Props) {
 
         const AllPairDevices: Record<string, boolean> = {};
 
+        // Build lookup maps for online devices, checking both id and deviceId
         props.vrDevices.map((d: Device) => {
           if (d.online) {
             vrDevice[d.id] = d.id;
+            // Also map by deviceId if it exists and is different from id
+            if (d.deviceId && d.deviceId !== d.id) {
+              vrDevice[d.deviceId] = d.deviceId;
+            }
           }
         });
         props.chairDevices.map((d: Device) => {
           if (d.online) {
             chairDevice[d.id] = d.id;
+            // Also map by deviceId if it exists and is different from id
+            if (d.deviceId && d.deviceId !== d.id) {
+              chairDevice[d.deviceId] = d.deviceId;
+            }
           }
         });
 
+        // Check if pair devices are online (match by either id or deviceId)
         props.pairs.map((p: Pair) => {
           AllPairDevices[p.vrId] = vrDevice[p.vrId] ? true : false;
           AllPairDevices[p.chairId] = chairDevice[p.chairId] ? true : false;
@@ -40,6 +50,15 @@ export default function ControllerStep(props: Props) {
 
         if (AllPairDevices) {
           const offlineDevices = Object.keys(AllPairDevices).filter((id) => AllPairDevices[id] === false);
+
+          // Debug logging to help identify ID mismatches
+          if (offlineDevices.length > 0) {
+            console.log('[ControllerStep] Offline devices detected:', offlineDevices);
+            console.log('[ControllerStep] Available VR device IDs:', Object.keys(vrDevice));
+            console.log('[ControllerStep] Available Chair device IDs:', Object.keys(chairDevice));
+            console.log('[ControllerStep] Pair device IDs:', props.pairs.map((p: Pair) => ({ vr: p.vrId, chair: p.chairId })));
+          }
+
           setSessionOfflineDevice(offlineDevices);
         }
       }

@@ -99,8 +99,16 @@ export default function DeviceControlPanel() {
   const devicesList = useMemo(() => Array.from(devicesMap.values()), [devicesMap]);
 
   const [pairs, setPairs] = useState<Pair[]>([]);
-  const vrDevices = useMemo(() => devicesList.filter((d) => d.type === "vr" && d.online), [devicesList]);
-  const chairDevices = useMemo(() => devicesList.filter((d) => d.type === "chair" && d.online), [devicesList]);
+  const vrDevices = useMemo(() => {
+    const filtered = devicesList.filter((d) => d.type === "vr" && d.online);
+    console.log("[ControllerStep] VR devices:", devicesList.filter((d) => d.type === "vr").map(d => ({ id: d.id, type: d.type, online: d.online, status: d.status })));
+    return filtered;
+  }, [devicesList]);
+  const chairDevices = useMemo(() => {
+    const filtered = devicesList.filter((d) => d.type === "chair" && d.online);
+    console.log("[ControllerStep] Chair devices:", devicesList.filter((d) => d.type === "chair").map(d => ({ id: d.id, type: d.type, online: d.online, status: d.status })));
+    return filtered;
+  }, [devicesList]);
   const pairedVrIds = useMemo(() => new Set(pairs.map((p) => p.vrId)), [pairs]);
   const pairedChairIds = useMemo(() => new Set(pairs.map((p) => p.chairId)), [pairs]);
   const [selectedVrId, setSelectedVrId] = useState<string>("");
