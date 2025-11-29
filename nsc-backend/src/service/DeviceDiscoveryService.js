@@ -98,6 +98,7 @@ class DeviceDiscoveryService {
    */
   async handleHeartbeat(topic, payload) {
     try {
+      // logger.info(`[DeviceDiscovery] Received heartbeat on ${topic}`);
       const deviceId = topic.split('/')[1]; // Extract deviceId from topic
       const data = JSON.parse(payload.toString());
       const now = new Date();

@@ -48,4 +48,7 @@ router.get('/active/list', auth(['admin', 'user']), controller.getActiveSessions
 // Unpair/deactivate a session - admin only
 router.delete('/:id/unpair', auth(['admin', 'user']), controller.unpairSession);
 
+// Force cleanup all ongoing sessions - admin only
+router.post('/cleanup', auth(['admin', 'user']), controller.cleanup);
+
 module.exports = router;

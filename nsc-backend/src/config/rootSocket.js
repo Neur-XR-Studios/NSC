@@ -98,8 +98,8 @@ const rootSocket = (io) => {
                             } else if (/^devices\/[^/]+\/events$/.test(topic)) {
                                 // Mirror events to admin panel
                                 let parsed;
-                                try { parsed = JSON.parse(payload); } catch { parsed = payload; }
-                                io.emit('mqtt_message', { topic, payload: parsed });
+                                try { parsed = JSON.parse(payload); } catch { }
+                                if (parsed) io.emit('mqtt_message', { topic, payload: parsed });
                             } else if (/^sessions\/[^/]+\/commands\//.test(topic) || /^devices\/[^/]+\/commands\//.test(topic)) {
                                 // Mirror command topics to Socket.IO mqtt_message so bridge subscribers get it immediately
                                 let parsed;

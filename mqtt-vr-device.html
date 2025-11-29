@@ -797,6 +797,18 @@
           lastSentEvent = "play";
           lastEventTime = now;
           sendEvent("play");
+
+          // Emit immediate status update
+          const statusPayload = {
+            deviceId: state.id,
+            type: state.type,
+            status: "active",
+            positionMs: Math.floor(state.positionMs),
+            sessionId: state.sessionId || "",
+            timestamp: new Date().toISOString(),
+          };
+          pub(T_status(state.id), JSON.stringify(statusPayload), false);
+          try { if (bridge && connected) bridge.emit("device:status", statusPayload); } catch { }
         });
 
         player.addEventListener("pause", () => {
@@ -811,6 +823,18 @@
           lastSentEvent = "pause";
           lastEventTime = now;
           sendEvent("pause");
+
+          // Emit immediate status update
+          const statusPayload = {
+            deviceId: state.id,
+            type: state.type,
+            status: "idle",
+            positionMs: Math.floor(state.positionMs),
+            sessionId: state.sessionId || "",
+            timestamp: new Date().toISOString(),
+          };
+          pub(T_status(state.id), JSON.stringify(statusPayload), false);
+          try { if (bridge && connected) bridge.emit("device:status", statusPayload); } catch { }
         });
 
         player.addEventListener("ended", () => {
@@ -1006,27 +1030,29 @@
 
     async function fetchOngoingSessionDetails() {
       if (!backendBaseUrl) return;
+      if (!state.sessionId) {
+        log("No session ID set, cannot fetch session details");
+        return;
+      }
       try {
-        const url = `${backendBaseUrl}/api/sessions?status=on_going`;
+        // Fetch the SPECIFIC session by ID, not all ongoing sessions
+        const url = `${backendBaseUrl}/api/sessions/${state.sessionId}`;
         const res = await fetch(url);
-        const json = await res.json();
-        const list = Array.isArray(json?.data?.data) ? json.data.data : Array.isArray(json?.data) ? json.data : [];
-        const first = Array.isArray(list) && list.length ? list[0] : null;
-        if (!first) {
-          document.getElementById("journeysList").textContent = "No ongoing session.";
+        if (!res.ok) {
+          log(`Failed to fetch session ${state.sessionId}: ${res.status} ${res.statusText}`);
+          document.getElementById("journeysList").textContent = `Failed to load session (${res.status}).`;
           return;
         }
-        const sid = String(first.id || "").trim();
-        const stype = String(first.session_type || first?.data?.session_type || "").toLowerCase();
-        state.sessionType = stype;
-        if (sid && !state.sessionId) {
-          state.sessionId = sid;
-          setK("s_session", sid);
-          try {
-            localStorage.setItem("nsc_device_session", sid);
-          } catch { }
-          sub(`sessions/${sid}/commands/+`);
+        const json = await res.json();
+        const sessionData = json?.data || json;
+        if (!sessionData) {
+          document.getElementById("journeysList").textContent = "No session data.";
+          return;
         }
+        const stype = String(sessionData.session_type || "").toLowerCase();
+        state.sessionType = stype;
+        log(`Session type: ${stype}`);
+
         // For individual mode, list ALL journeys from API; for group, use session's journeys
         if (stype === "individual") {
           try {
@@ -1038,16 +1064,17 @@
                 ? jjson.data
                 : [];
             state.journeys = jlist || [];
+            log(`Loaded ${state.journeys.length} journeys for individual session`);
           } catch (e) {
+            log("Failed to load journeys: " + (e?.message || e));
             state.journeys = [];
           }
         } else {
-          const journeys = Array.isArray(first.journeys)
-            ? first.journeys
-            : Array.isArray(first.data?.journeys)
-              ? first.data.journeys
-              : [];
+          const journeys = Array.isArray(sessionData.journeys)
+            ? sessionData.journeys
+            : [];
           state.journeys = journeys || [];
+          log(`Loaded ${state.journeys.length} journeys from session data`);
         }
         renderJourneys();
         // For group sessions, auto-select a journey if none selected yet; for individual, let user choose
@@ -1057,11 +1084,14 @@
             const one = state.journeys[0];
             targetJid = one?.journey?.id != null ? String(one.journey.id) : "";
           }
-          if (targetJid) selectAndLoadJourney(targetJid);
+          if (targetJid) {
+            log(`Auto-selecting journey ${targetJid} for group session`);
+            selectAndLoadJourney(targetJid);
+          }
         }
       } catch (e) {
         log("fetchOngoingSessionDetails error: " + (e?.message || e));
-        document.getElementById("journeysList").textContent = "Failed to load ongoing session.";
+        document.getElementById("journeysList").textContent = "Failed to load session.";
       }
     }
 
@@ -1105,7 +1135,7 @@
       state.journeyId = String(jid || "");
       setK("s_journey", state.journeyId || "-");
       const arr = state.journeys || [];
-      const found = arr.find((j) => String(j?.journey?.id || "") === String(state.journeyId));
+      const found = arr.find((j) => String(j?.journey?.id || j?.video?.id || "") === String(state.journeyId));
       const vurl = found?.video?.url || found?.video?.video_url || "";
       if (player && vurl) {
         try {
@@ -1127,103 +1157,108 @@
     function handleCmd(data) {
       const cmd = (data.command || data.type || "").toLowerCase();
       const cmdJourneyId = data.journeyId != null ? String(data.journeyId) : null;
+      const applyAtMs = data.applyAtMs || 0;
+      const now = Date.now();
+      const delay = Math.max(0, applyAtMs - now);
 
       // Set flag to prevent event feedback
       isProcessingCommand = true;
 
-      if (cmd === "start" || cmd === "play") {
-        if (cmdJourneyId && cmdJourneyId !== state.journeyId) {
-          selectAndLoadJourney(cmdJourneyId);
-        }
-        if (typeof data.positionMs === "number") state.positionMs = data.positionMs;
-        if (player && player.src) {
-          try {
-            if (typeof data.positionMs === "number") {
-              player.currentTime = Math.max(0, data.positionMs / 1000);
-              lastSentPosition = data.positionMs;
-            }
-          } catch { }
-          player.play().catch(() => { });
-        }
-        state.playing = true;
-        setK("s_state", "▶ Playing");
-        lastSentEvent = "play";
-      } else if (cmd === "pause") {
-        if (typeof data.positionMs === "number") {
-          state.positionMs = data.positionMs;
-          lastSentPosition = data.positionMs;
-        }
-        if (player && player.src) {
-          try {
-            if (typeof data.positionMs === "number") {
-              player.currentTime = Math.max(0, data.positionMs / 1000);
-            }
-          } catch { }
-          player.pause();
-        }
-        state.playing = false;
-        setK("s_state", "⏸ Paused");
-        lastSentEvent = "pause";
-      } else if (cmd === "seek") {
-        if (typeof data.positionMs === "number") {
-          state.positionMs = data.positionMs;
-          lastSentPosition = data.positionMs;
-        }
-        if (player && player.src) {
-          player.currentTime = Math.max(0, (state.positionMs || 0) / 1000);
-        }
-        setK("s_state", "⏩ Seeking");
-      } else if (cmd === "stop" || cmd === "reset") {
-        state.playing = false;
-        state.positionMs = 0;
-        lastSentPosition = 0;
-        if (player && player.src) {
-          player.pause();
-          player.currentTime = 0;
-        }
-        setK("s_state", "State: stopped");
-        lastSentEvent = "stop";
-      } else if (cmd === "calibrate") {
-        setK("s_state", "🔧 Calibrating");
-      } else if (cmd === "join_session") {
-        const sid = String(data.sessionId || data.session_id || "").trim();
-        if (sid) {
-          document.getElementById("sessionInput").value = sid;
-          joinSession();
-        }
-      } else if (cmd === "leave_session") {
-        leaveSession();
-      } else if (cmd === "select_journey") {
-        const jid = (data.journeyId != null ? String(data.journeyId) : "").trim();
-        const lang = (data.language || "").trim();
-        log(`Selecting journey ${jid} with language: ${lang || "default"}`);
-        selectAndLoadJourney(jid);
-        // Note: HTML simulator doesn't have full audio track support
-        // Unity will use the language parameter to select the correct audio track
-      }
-      setK("s_pos", `Position: ${Math.max(0, Math.floor(state.positionMs))} ms`);
-
-      // Also emit a status update
-      // Throttled status update
-      const now = Date.now();
-      if (now - lastStatusUpdate > STATUS_THROTTLE_MS || !state.playing) {
-        const statusPayload = {
-          deviceId: state.id,
-          type: state.type,
-          status: state.playing ? "active" : "idle",
-          positionMs: Math.floor(state.positionMs),
-          sessionId: state.sessionId || "",
-          timestamp: new Date().toISOString(),
-        };
-        pub(T_status(state.id), JSON.stringify(statusPayload), false);
-        try {
-          if (bridge && connected) bridge.emit("device:status", statusPayload);
-        } catch { }
-        lastStatusUpdate = now;
-      }
       setTimeout(() => {
-        isProcessingCommand = false;
-      }, 100);
+        if (cmd === "start" || cmd === "play") {
+          if (cmdJourneyId && cmdJourneyId !== state.journeyId) {
+            selectAndLoadJourney(cmdJourneyId);
+          }
+          if (typeof data.positionMs === "number") state.positionMs = data.positionMs;
+          if (player && player.src) {
+            try {
+              if (typeof data.positionMs === "number") {
+                player.currentTime = Math.max(0, data.positionMs / 1000);
+                lastSentPosition = data.positionMs;
+              }
+            } catch { }
+            player.play().catch(() => { });
+          }
+          state.playing = true;
+          setK("s_state", "▶ Playing");
+          lastSentEvent = "play";
+        } else if (cmd === "pause") {
+          if (typeof data.positionMs === "number") {
+            state.positionMs = data.positionMs;
+            lastSentPosition = data.positionMs;
+          }
+          if (player && player.src) {
+            try {
+              if (typeof data.positionMs === "number") {
+                player.currentTime = Math.max(0, data.positionMs / 1000);
+              }
+            } catch { }
+            player.pause();
+          }
+          state.playing = false;
+          setK("s_state", "⏸ Paused");
+          lastSentEvent = "pause";
+        } else if (cmd === "seek") {
+          if (typeof data.positionMs === "number") {
+            state.positionMs = data.positionMs;
+            lastSentPosition = data.positionMs;
+          }
+          if (player && player.src) {
+            player.currentTime = Math.max(0, (state.positionMs || 0) / 1000);
+          }
+          setK("s_state", "⏩ Seeking");
+        } else if (cmd === "stop" || cmd === "reset") {
+          state.playing = false;
+          state.positionMs = 0;
+          lastSentPosition = 0;
+          if (player && player.src) {
+            player.pause();
+            player.currentTime = 0;
+          }
+          setK("s_state", "State: stopped");
+          lastSentEvent = "stop";
+        } else if (cmd === "calibrate") {
+          setK("s_state", "🔧 Calibrating");
+        } else if (cmd === "join_session") {
+          const sid = String(data.sessionId || data.session_id || "").trim();
+          if (sid) {
+            document.getElementById("sessionInput").value = sid;
+            joinSession();
+          }
+        } else if (cmd === "leave_session") {
+          leaveSession();
+        } else if (cmd === "select_journey") {
+          const jid = (data.journeyId != null ? String(data.journeyId) : "").trim();
+          const lang = (data.language || "").trim();
+          log(`Selecting journey ${jid} with language: ${lang || "default"}`);
+          selectAndLoadJourney(jid);
+          // Note: HTML simulator doesn't have full audio track support
+          // Unity will use the language parameter to select the correct audio track
+        }
+        setK("s_pos", `Position: ${Math.max(0, Math.floor(state.positionMs))} ms`);
+
+        // Also emit a status update
+        // Throttled status update
+        const currentNow = Date.now();
+        if (currentNow - lastStatusUpdate > STATUS_THROTTLE_MS || !state.playing) {
+          const statusPayload = {
+            deviceId: state.id,
+            type: state.type,
+            status: state.playing ? "active" : "idle",
+            positionMs: Math.floor(state.positionMs),
+            sessionId: state.sessionId || "",
+            timestamp: new Date().toISOString(),
+          };
+          pub(T_status(state.id), JSON.stringify(statusPayload), false);
+          try {
+            if (bridge && connected) bridge.emit("device:status", statusPayload);
+          } catch { }
+          lastStatusUpdate = currentNow;
+        }
+        setTimeout(() => {
+          isProcessingCommand = false;
+        }, 100);
+      }, delay);
     }
 
     function startTicker() {
@@ -1258,7 +1293,7 @@
         if (bridge) bridge.emit("device:heartbeat", hb);
       } catch { }
       pub(T_heartbeat(state.id), JSON.stringify(hb), false);
-    }, 15000);
+    }, 5000);
 
     function stopTicker() {
       if (ticker) {

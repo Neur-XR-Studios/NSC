@@ -8,6 +8,7 @@ import {
   commandSession,
   addParticipant,
   getSessionById,
+  cleanupSessions,
   type SessionType,
 } from "@/lib/sessions";
 import ProgressStepper from "./components/ProgressStepper";
@@ -690,6 +691,20 @@ export default function DeviceControlPanel() {
     initialLoadRef.current = false;
   }, []);
 
+  const handleCleanup = useCallback(async () => {
+    if (!confirm("Are you sure? This will stop ALL ongoing sessions for everyone.")) return;
+    try {
+      await cleanupSessions();
+      log("Cleanup command sent. Resetting local state...");
+      resetFlow();
+      // Force reload to ensure clean state
+      window.location.reload();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      log(`Cleanup failed: ${message}`);
+    }
+  }, [log, resetFlow]);
+
   // const selectedVr = useMemo(() => vrDevices.find((d) => d.id === selectedVrId), [vrDevices, selectedVrId]);
   // const selectedChair = useMemo(
   //   () => chairDevices.find((d) => d.id === selectedChairId),
@@ -827,6 +842,15 @@ export default function DeviceControlPanel() {
   return (
     <div className="">
       <div className="container">
+        <div className="flex justify-end py-2">
+          <button
+            onClick={handleCleanup}
+            className="text-xs text-red-400 hover:text-red-300 underline"
+            title="Force stop all ongoing sessions and reset UI"
+          >
+            Force Cleanup
+          </button>
+        </div>
         {/* Progress Stepper */}
         <ProgressStepper currentStepNumber={currentStepNumber} connected={connected} mode={mode} sessionType={sessionType} />
 

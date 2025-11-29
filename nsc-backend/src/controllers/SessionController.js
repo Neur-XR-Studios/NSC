@@ -250,6 +250,16 @@ class SessionController {
       return res.status(httpStatus.BAD_GATEWAY).send({ status: false, message: e.message });
     }
   };
+  // Force cleanup all ongoing sessions
+  cleanup = async (req, res) => {
+    try {
+      const result = await this.service.cleanupOngoingSessions();
+      return res.status(result.statusCode).send(result.response);
+    } catch (e) {
+      logger.error(e);
+      return res.status(httpStatus.BAD_GATEWAY).send({ status: false, message: e.message });
+    }
+  };
 }
 
 module.exports = SessionController;

@@ -868,55 +868,70 @@
 
         async function fetchOngoingSessionDetails() {
             if (!backendBaseUrl) return;
+            if (!state.sessionId) {
+                log("No session ID set, cannot fetch session details");
+                return;
+            }
             try {
-                const url = `${backendBaseUrl}/api/sessions?status=on_going`;
+                // Fetch the SPECIFIC session by ID, not all ongoing sessions
+                const url = `${backendBaseUrl}/api/sessions/${state.sessionId}`;
                 const res = await fetch(url);
-                const json = await res.json();
-                const list = Array.isArray(json?.data?.data) ? json.data.data : Array.isArray(json?.data) ? json.data : [];
-                const first = Array.isArray(list) && list.length ? list[0] : null;
-                if (!first) {
+                if (!res.ok) {
+                    log(`Failed to fetch session ${state.sessionId}: ${res.status} ${res.statusText}`);
                     document.getElementById("telemetryViewer").innerHTML = `
-            <div style="flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; color: #9ca3af;">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width: 32px; height: 32px; margin-bottom: 8px; opacity: 0.5;">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              <div style="font-size: 11px;">No ongoing session.</div>
+            <div style="flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; color: #ef4444;">
+              <div style="font-size: 11px;">Failed to load session (${res.status}).</div>
             </div>
           `;
                     return;
                 }
-                const sid = String(first.id || "").trim();
-                const stype = String(first.session_type || first?.data?.session_type || "").toLowerCase();
-                state.sessionType = stype;
-                if (sid && !state.sessionId) {
-                    state.sessionId = sid;
-                    setK("s_session", sid);
-                    try {
-                        localStorage.setItem("nsc_device_session", sid);
-                    } catch { }
-                    sub(`sessions/${sid}/commands/+`);
+                const json = await res.json();
+                const sessionData = json?.data || json;
+                if (!sessionData) {
+                    document.getElementById("telemetryViewer").innerHTML = `
+            <div style="flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; color: #94a3b8;">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width: 32px; height: 32px; margin-bottom: 8px; opacity: 0.5;">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <div style="font-size: 11px;">No session data.</div>
+            </div>
+          `;
+                    return;
                 }
+                const stype = String(sessionData.session_type || "").toLowerCase();
+                state.sessionType = stype;
+                log(`Session type: ${stype}`);
 
                 // For chair device, fetch only telemetry data from journeys
-                const journeys = Array.isArray(first.journeys)
-                    ? first.journeys
-                    : Array.isArray(first.data?.journeys)
-                        ? first.data.journeys
-                        : [];
+                const journeys = Array.isArray(sessionData.journeys)
+                    ? sessionData.journeys
+                    : [];
+
+                log(`Found ${journeys.length} journeys in session`);
 
                 if (journeys.length > 0) {
                     // Auto-select first journey for telemetry
                     const firstJourney = journeys[0];
                     const jid = String(firstJourney?.journey?.id || "");
                     if (jid) {
+                        log(`Auto-selecting journey ${jid} for telemetry`);
                         await loadJourneyTelemetry(jid);
+                    } else {
+                        log("No valid journey ID found in first journey");
                     }
+                } else {
+                    log("No journeys found in session");
+                    document.getElementById("telemetryViewer").innerHTML = `
+            <div style="flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; color: #94a3b8;">
+              <div style="font-size: 11px;">No journeys in session.</div>
+            </div>
+          `;
                 }
             } catch (e) {
                 log("fetchOngoingSessionDetails error: " + (e?.message || e));
                 document.getElementById("telemetryViewer").innerHTML = `
           <div style="flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; color: #ef4444;">
-            <div style="font-size: 11px;">Failed to load ongoing session.</div>
+            <div style="font-size: 11px;">Failed to load session.</div>
           </div>
         `;
             }
@@ -1014,86 +1029,92 @@
 
         function handleCmd(data) {
             const cmd = (data.command || data.type || "").toLowerCase();
-            const cmdJourneyId = data.journeyId != null ? String(data.journeyId) : null;
-
-            if (cmd === "start" || cmd === "play") {
-                if (cmdJourneyId && cmdJourneyId !== state.journeyId) {
-                    loadJourneyTelemetry(cmdJourneyId);
-                }
-                if (typeof data.positionMs === "number") state.positionMs = data.positionMs;
-                state.playing = true;
-                setK("s_state", "▶ Playing");
-                updateMotionFromTelemetry(state.positionMs);
-            } else if (cmd === "pause") {
-                if (typeof data.positionMs === "number") {
-                    state.positionMs = data.positionMs;
-                }
-                state.playing = false;
-                setK("s_state", "⏸ Paused");
-                updateMotionFromTelemetry(state.positionMs);
-            } else if (cmd === "seek") {
-                if (typeof data.positionMs === "number") {
-                    state.positionMs = data.positionMs;
-                }
-                setK("s_state", "⏩ Seeking");
-                updateMotionFromTelemetry(state.positionMs);
-            } else if (cmd === "stop" || cmd === "reset") {
-                state.playing = false;
-                state.positionMs = 0;
-                setK("s_state", "⏹ Stopped");
-                // Reset motion indicators
-                setK("motion_pitch", "0.0°");
-                setK("motion_roll", "0.0°");
-                setK("motion_yaw", "0.0°");
-                setK("motion_heave", "0.0mm");
-                setK("motion_surge", "0.0mm");
-                setK("motion_sway", "0.0mm");
-                setK("current_frame", "-");
-            } else if (cmd === "calibrate") {
-                setK("s_state", "🔧 Calibrating");
-            } else if (cmd === "join_session") {
-                const sid = String(data.sessionId || data.session_id || "").trim();
-                if (sid) {
-                    document.getElementById("sessionInput").value = sid;
-                    joinSession();
-                }
-            } else if (cmd === "leave_session") {
-                leaveSession();
-            } else if (cmd === "select_journey") {
-                const jid = (data.journeyId != null ? String(data.journeyId) : "").trim();
-                log(`Selecting journey ${jid} for telemetry`);
-                loadJourneyTelemetry(jid);
-            }
-
-            // Update position display
-            const pos = Math.max(0, Math.floor(state.positionMs));
-            const sec = Math.floor(pos / 1000);
-            const min = Math.floor(sec / 60);
-            const s = sec % 60;
-            setK("s_pos", `${min}:${s.toString().padStart(2, "0")}`);
-
-            // Also emit a status update
-            // Throttled status update
+            const applyAtMs = data.applyAtMs || 0;
             const now = Date.now();
-            if (now - lastStatusUpdate > STATUS_THROTTLE_MS || !state.playing) {
-                const statusPayload = {
-                    deviceId: state.id,
-                    type: state.type,
-                    status: state.playing ? "active" : "idle",
-                    positionMs: Math.floor(state.positionMs),
-                    sessionId: state.sessionId || "",
-                    journeyId: state.journeyId || "",
-                    timestamp: new Date().toISOString(),
-                };
-                pub(T_status(state.id), JSON.stringify(statusPayload), false);
-                try {
-                    if (bridge && connected) bridge.emit("device:status", statusPayload);
-                } catch { }
-                lastStatusUpdate = now;
-            }
-            try {
-                if (bridge && connected) bridge.emit("device:status", statusPayload);
-            } catch { }
+            const delay = Math.max(0, applyAtMs - now);
+
+            // Set flag to prevent event feedback
+            // isProcessingCommand = true;
+
+            setTimeout(() => {
+                const cmdJourneyId = data.journeyId != null ? String(data.journeyId) : null;
+
+                if (cmd === "start" || cmd === "play") {
+                    if (cmdJourneyId && cmdJourneyId !== state.journeyId) {
+                        loadJourneyTelemetry(cmdJourneyId);
+                    }
+                    if (typeof data.positionMs === "number") state.positionMs = data.positionMs;
+                    state.playing = true;
+                    setK("s_state", "▶ Playing");
+                    updateMotionFromTelemetry(state.positionMs);
+                } else if (cmd === "pause") {
+                    if (typeof data.positionMs === "number") {
+                        state.positionMs = data.positionMs;
+                    }
+                    state.playing = false;
+                    setK("s_state", "⏸ Paused");
+                    updateMotionFromTelemetry(state.positionMs);
+                } else if (cmd === "seek") {
+                    if (typeof data.positionMs === "number") {
+                        state.positionMs = data.positionMs;
+                    }
+                    setK("s_state", "⏩ Seeking");
+                    updateMotionFromTelemetry(state.positionMs);
+                } else if (cmd === "stop" || cmd === "reset") {
+                    state.playing = false;
+                    state.positionMs = 0;
+                    setK("s_state", "⏹ Stopped");
+                    // Reset motion indicators
+                    setK("motion_pitch", "0.0°");
+                    setK("motion_roll", "0.0°");
+                    setK("motion_yaw", "0.0°");
+                    setK("motion_heave", "0.0mm");
+                    setK("motion_surge", "0.0mm");
+                    setK("motion_sway", "0.0mm");
+                    setK("current_frame", "-");
+                } else if (cmd === "calibrate") {
+                    setK("s_state", "🔧 Calibrating");
+                } else if (cmd === "join_session") {
+                    const sid = String(data.sessionId || data.session_id || "").trim();
+                    if (sid) {
+                        document.getElementById("sessionInput").value = sid;
+                        joinSession();
+                    }
+                } else if (cmd === "leave_session") {
+                    leaveSession();
+                } else if (cmd === "select_journey") {
+                    const jid = (data.journeyId != null ? String(data.journeyId) : "").trim();
+                    log(`Selecting journey ${jid} for telemetry`);
+                    loadJourneyTelemetry(jid);
+                }
+
+                // Update position display
+                const pos = Math.max(0, Math.floor(state.positionMs));
+                const sec = Math.floor(pos / 1000);
+                const min = Math.floor(sec / 60);
+                const s = sec % 60;
+                setK("s_pos", `${min}:${s.toString().padStart(2, "0")}`);
+
+                // Also emit a status update
+                // Throttled status update
+                const currentNow = Date.now();
+                if (currentNow - lastStatusUpdate > STATUS_THROTTLE_MS || !state.playing) {
+                    const statusPayload = {
+                        deviceId: state.id,
+                        type: state.type,
+                        status: state.playing ? "active" : "idle",
+                        positionMs: Math.floor(state.positionMs),
+                        sessionId: state.sessionId || "",
+                        journeyId: state.journeyId || "",
+                        timestamp: new Date().toISOString(),
+                    };
+                    pub(T_status(state.id), JSON.stringify(statusPayload), false);
+                    try {
+                        if (bridge && connected) bridge.emit("device:status", statusPayload);
+                    } catch { }
+                    lastStatusUpdate = currentNow;
+                }
+            }, delay);
         }
 
         function startTicker() {
@@ -1130,7 +1151,7 @@
                 if (bridge) bridge.emit("device:heartbeat", hb);
             } catch { }
             pub(T_heartbeat(state.id), JSON.stringify(hb), false);
-        }, 15000);
+        }, 5000);
 
         function stopTicker() {
             if (ticker) {

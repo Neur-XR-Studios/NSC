@@ -217,3 +217,8 @@ export async function getFeedbackStats(): Promise<{
   return res.data?.data || res.data as any;
 }
 
+export async function cleanupSessions(): Promise<{ status: boolean; message: string }> {
+  const res = await api.post<{ status: boolean; message: string; data?: any }>("sessions/cleanup");
+  return res.data as { status: boolean; message: string };
+}
+

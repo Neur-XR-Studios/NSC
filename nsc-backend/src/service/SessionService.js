@@ -52,6 +52,29 @@ class SessionService {
       return { statusCode: httpStatus.BAD_REQUEST, response: { status: false, message: 'Validation failed', errors } };
     }
 
+    // Check if devices are online
+    const deviceDiscoveryService = require('./DeviceDiscoveryService');
+    const offlineDevices = [];
+
+    // Use the resolved device object's deviceId (MQTT ID) for the check, not the input ID (which might be a UUID)
+    if (vr && !deviceDiscoveryService.isDeviceOnline(vr.deviceId)) {
+      offlineDevices.push(`VR (${vr.deviceId})`);
+    }
+    if (chair && !deviceDiscoveryService.isDeviceOnline(chair.deviceId)) {
+      offlineDevices.push(`Chair (${chair.deviceId})`);
+    }
+
+    if (offlineDevices.length > 0) {
+      return {
+        statusCode: httpStatus.BAD_REQUEST,
+        response: {
+          status: false,
+          message: `Cannot start session: Devices are offline: ${offlineDevices.join(', ')}`,
+          errors: { offlineDevices }
+        }
+      };
+    }
+
 
     // Auto-generate group_id if group session and not provided
     let finalGroupId = groupId || null;
@@ -1105,6 +1128,60 @@ class SessionService {
       );
     } catch (e) {
       logger.warn(`[updateActivity] Failed to update activity for session ${sessionId}:`, e.message);
+    }
+  }
+  /**
+   * Force cleanup all ongoing sessions
+   */
+  async cleanupOngoingSessions() {
+    try {
+      // Find all ongoing sessions
+      const ongoingSessions = await Session.findAll({
+        where: {
+          [Op.or]: [
+            { overall_status: 'on_going' },
+            { status: 'on_going' }
+          ]
+        }
+      });
+
+      logger.info(`[SessionService] Found ${ongoingSessions.length} ongoing sessions to cleanup`);
+
+      const results = [];
+      for (const session of ongoingSessions) {
+        try {
+          // Mark as stopped
+          session.overall_status = 'stopped';
+          session.status = 'stopped';
+          session.end_time = new Date();
+          await session.save();
+
+          // Notify clients
+          global.io?.to(`session_${session.id}`).emit('session:stopped', {
+            sessionId: session.id,
+            reason: 'cleanup'
+          });
+
+          results.push(session.id);
+        } catch (err) {
+          logger.error(`[SessionService] Failed to cleanup session ${session.id}`, err);
+        }
+      }
+
+      return {
+        statusCode: httpStatus.OK,
+        response: {
+          status: true,
+          message: `Cleaned up ${results.length} sessions`,
+          data: { cleanedSessionIds: results }
+        }
+      };
+    } catch (error) {
+      logger.error('[SessionService] Cleanup error', error);
+      return {
+        statusCode: httpStatus.INTERNAL_SERVER_ERROR,
+        response: { status: false, message: error.message }
+      };
     }
   }
 }
