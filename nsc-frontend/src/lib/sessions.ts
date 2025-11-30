@@ -165,3 +165,55 @@ export async function getSessionById(sessionId: string): Promise<SessionDetailsE
   // Fallback: treat body as the raw session object
   return { status: true, data: body as SessionDetailsEnvelope['data'] } as SessionDetailsEnvelope;
 }
+
+// Session Feedback APIs
+export interface SessionFeedback {
+  id: string;
+  session_id: string;
+  rating: number;
+  feedback_text?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function submitSessionFeedback(
+  sessionId: string,
+  rating: number,
+  feedbackText?: string
+): Promise<SessionFeedback> {
+  const body = {
+    session_id: sessionId,
+    rating,
+    feedback_text: feedbackText || null,
+  };
+  const res = await api.post<{ status: boolean; data: SessionFeedback }>("session-feedbacks", body);
+  const responseData = res.data as any;
+  return responseData?.data || responseData;
+}
+
+export async function getSessionFeedbacks(params: {
+  page?: number;
+  limit?: number;
+  search?: string;
+}): Promise<{
+  data: SessionFeedback[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}> {
+  const res = await api.get<{ status: boolean; data: any }>("session-feedbacks", params);
+  return res.data?.data || res.data as any;
+}
+
+export async function getFeedbackStats(): Promise<{
+  total_count: number;
+  average_rating: string;
+  min_rating: number;
+  max_rating: number;
+  distribution: Record<number, number>;
+}> {
+  const res = await api.get<{ status: boolean; data: any }>("session-feedbacks/stats/all");
+  return res.data?.data || res.data as any;
+}
+
