@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertCircle, ArrowLeft, CheckCircle2, Clock, PlayCircle, RefreshCw } from "lucide-react";
 import type { JourneyItem } from "@/types/journey";
 import type { SessionType } from "@/lib/sessions";
+import { customCss } from "@/lib/customCss";
 
 interface Props {
   journeys: JourneyItem[];
@@ -92,18 +93,26 @@ export default function JourneySelectionStep({
                     type="button"
                     onClick={() => {
                       if (sessionType === "group") {
-                        setSelectedJourneyIds((prev) => (prev.includes(jid) ? prev.filter((x) => x !== jid) : [...prev, jid]));
+                        setSelectedJourneyIds((prev) =>
+                          prev.includes(jid) ? prev.filter((x) => x !== jid) : [...prev, jid],
+                        );
                       } else {
                         setSelectedJourneyIds(() => (jid ? [jid] : []));
                       }
                     }}
                     className={`group relative rounded-2xl overflow-hidden transition-all ${
-                      isSelected(jid) ? "ring-2 ring-cyan-500 shadow-xl shadow-cyan-500/20" : "border border-slate-700 hover:border-cyan-500/50 hover:shadow-lg"
+                      isSelected(jid)
+                        ? "ring-2 ring-cyan-500 shadow-xl shadow-cyan-500/20"
+                        : "border border-slate-700 hover:border-cyan-500/50 hover:shadow-lg"
                     } bg-slate-800/30`}
                   >
                     <div className="relative h-44 w-full bg-slate-800 overflow-hidden">
                       {thumb ? (
-                        <img src={thumb} alt={title} className="h-full w-full object-cover transition-transform group-hover:scale-110" />
+                        <img
+                          src={thumb}
+                          alt={title}
+                          className="h-full w-full object-cover transition-transform group-hover:scale-110"
+                        />
                       ) : (
                         <div className="h-full w-full flex items-center justify-center">
                           <PlayCircle className="w-12 h-12 text-slate-700" />
@@ -134,7 +143,7 @@ export default function JourneySelectionStep({
                         >
                           <label className="block text-xs text-slate-400 mb-1">Audio Language</label>
                           <select
-                            value={selectedJourneyLangs[jid] || it.audio_tracks[0]?.language_code || ''}
+                            value={selectedJourneyLangs[jid] || it.audio_tracks[0]?.language_code || ""}
                             onClick={(e) => e.stopPropagation()}
                             onMouseDown={(e) => e.stopPropagation()}
                             onChange={(e) => {
@@ -170,9 +179,10 @@ export default function JourneySelectionStep({
               if (sessionType === "individual") onCreateIndividual();
               else onCreateGroup();
             }}
-            className="gap-2 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-700 hover:to-cyan-700 text-white px-10 py-4 rounded-xl font-semibold shadow-lg text-lg"
+            size="lg"
+            className={customCss.button + " text-lg flex items-center gap-2"}
           >
-            <PlayCircle className="w-6 h-6" />
+            <PlayCircle className="!w-6 !h-6" />
             {sessionType === "individual" ? "Create Session & Start" : "Create Group Session & Start"}
           </Button>
         </div>

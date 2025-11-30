@@ -24,6 +24,7 @@ type Device = {
   name: string;
   online: boolean;
   deviceId?: string; // Hardware device ID for MQTT communication
+  display_name?: string; // User-friendly display name
   lastSeen?: number;
   status?: string;
   positionMs?: number;
@@ -80,6 +81,9 @@ export default function DeviceControlPanel() {
   const [clientId] = useState<string>(`admin-${Math.random().toString(36).slice(2, 8).toUpperCase()}`);
   const [username] = useState<string>("admin@example.com");
   const [password] = useState<string>("Admin@123");
+
+  // Ref to track initial session load
+  const initialLoadRef = useRef<boolean>(false);
 
   // Journeys
   const [journeys, setJourneys] = useState<JourneyItem[]>([]);
@@ -150,6 +154,10 @@ export default function DeviceControlPanel() {
   // Load ongoing sessions on initial mount to lock into controller if needed
   useEffect(() => {
     const loadOngoing = async () => {
+      // Prevent loading if we've already loaded the initial session
+      if (initialLoadRef.current) return;
+      initialLoadRef.current = true;
+      
       try {
         const res = await api.get<SessionsEnvelope | { data?: SessionRec[] }>("sessions", { status: "on_going" });
         const root = res?.data as SessionsEnvelope | { data?: SessionRec[] } | undefined;
@@ -275,7 +283,7 @@ export default function DeviceControlPanel() {
   }, [logs]);
 
   const renderDevices = useCallback((updater: (prev: Map<string, Device>) => Map<string, Device>) => {
-    setDevicesMap((prev) => {
+    setDevicesMap((prev: Map<string, Device>) => {
       const next = new Map(prev);
       return updater(next);
     });
@@ -347,27 +355,28 @@ export default function DeviceControlPanel() {
       // }
       try {
         if (t === "devices/discovery/announce") {
-          const d = JSON.parse(p || "{}");
+          const d = JSON.parse(p || "{}") as { deviceId?: string; type?: DeviceType; name?: string; display_name?: string };
           const id = d.deviceId;
           if (!id) return;
-          renderDevices((map) => {
+          renderDevices((map: Map<string, Device>) => {
             const cur: Device = map.get(id) || {
               id,
               type: (d.type as DeviceType) || "unknown",
-              name: d.name || id,
+              name: d.display_name || d.name || id,
               online: false,
             };
             cur.type = (d.type as DeviceType) || cur.type;
-            cur.name = d.name || cur.name;
+            cur.name = d.display_name || d.name || cur.name;
+            if (d.display_name) cur.display_name = d.display_name;
             cur.lastSeen = Date.now();
             map.set(id, cur);
             return map;
           });
         } else if (t.startsWith("devices/") && t.endsWith("/status")) {
           const id = t.split("/")[1];
-          const data = JSON.parse(p || "{}");
-          renderDevices((map) => {
-            const cur: Device = map.get(id) || { id, type: "unknown", name: id, online: false };
+          const data = JSON.parse(p || "{}") as { status?: string; type?: string; positionMs?: number; sessionId?: string; language?: string; display_name?: string };
+          renderDevices((map: Map<string, Device>) => {
+            const cur: Device = map.get(id) || { id, type: "unknown", name: data?.display_name || id, online: false };
             const rawStatus = String((data && data.status) || "").toLowerCase();
             // Normalize status variants
             const status =
@@ -393,13 +402,14 @@ export default function DeviceControlPanel() {
             if (typeof data?.positionMs === "number") cur.positionMs = Number(data.positionMs);
             if (typeof data?.sessionId === "string") cur.sessionId = String(data.sessionId);
             if (typeof data?.language === "string") cur.language = String(data.language);
+            if (data?.display_name) cur.display_name = data.display_name;
             cur.lastSeen = Date.now();
             map.set(id, cur);
             return map;
           });
         } else if (t.startsWith("devices/") && t.endsWith("/heartbeat")) {
           const id = t.split("/")[1];
-          renderDevices((map) => {
+          renderDevices((map: Map<string, Device>) => {
             const cur: Device = map.get(id) || { id, type: "unknown", name: id, online: false };
             cur.online = true;
             cur.lastSeen = Date.now();
@@ -408,10 +418,10 @@ export default function DeviceControlPanel() {
           });
         } else if (t.startsWith("devices/") && t.endsWith("/events")) {
           const id = t.split("/")[1];
-          const data = JSON.parse(p || "{}");
+          const data = JSON.parse(p || "{}") as { event?: string; type?: string; journeyId?: number; playing?: boolean; positionMs?: number; sessionId?: string; language?: string; display_name?: string; timestamp?: string };
           const event = String(data?.event || "").toLowerCase();
-          renderDevices((map) => {
-            const cur: Device = map.get(id) || { id, type: "unknown", name: id, online: false };
+          renderDevices((map: Map<string, Device>) => {
+            const cur: Device = map.get(id) || { id, type: "unknown", name: data?.display_name || id, online: false };
             // Events imply device is alive
             cur.online = true;
             // Update device type from event payload if available; otherwise infer from id
@@ -435,6 +445,7 @@ export default function DeviceControlPanel() {
             if (typeof data?.positionMs === "number") cur.positionMs = Number(data.positionMs);
             if (typeof data?.sessionId === "string") cur.sessionId = String(data.sessionId);
             if (typeof data?.language === "string") cur.language = String(data.language);
+            if (data?.display_name) cur.display_name = data.display_name;
             cur.lastEvent = event;
             cur.lastEventTimestamp = String(data?.timestamp || "");
             cur.lastSeen = Date.now();
@@ -478,15 +489,16 @@ export default function DeviceControlPanel() {
             // }
             try {
               if (Array.isArray(payload)) {
-                renderDevices((map) => {
+                renderDevices((map: Map<string, Device>) => {
                   const next = new Map(map);
-                  (payload as Array<Record<string, unknown>>).forEach((d) => {
+                  (payload as Array<Record<string, unknown>>).forEach((d: Record<string, unknown>) => {
                     if (!d?.deviceId) return;
                     next.set(d.deviceId as string, {
                       id: d.deviceId as string,
                       deviceId: d.deviceId as string,
                       type: (d.type as DeviceType) || "unknown",
-                      name: (d.name as string) || (d.deviceId as string),
+                      name: (d.display_name as string) || (d.name as string) || (d.deviceId as string),
+                      display_name: (d.display_name as string),
                       online: true,
                       lastSeen: Date.now(),
                     });
@@ -506,9 +518,9 @@ export default function DeviceControlPanel() {
             //   const message = e instanceof Error ? e.message : String(e);
             //   log(`Failed to log message: ${message}`);
             // }
-            const data = d as { deviceId?: string; type?: DeviceType; name?: string };
+            const data = d as { deviceId?: string; type?: DeviceType; name?: string; display_name?: string };
             if (!data?.deviceId) return;
-            renderDevices((map) => {
+            renderDevices((map: Map<string, Device>) => {
               const cur: Device = map.get(data.deviceId!) || {
                 id: data.deviceId!,
                 deviceId: data.deviceId!,
@@ -517,7 +529,8 @@ export default function DeviceControlPanel() {
                 online: false,
               };
               cur.type = (data.type as DeviceType) || cur.type;
-              cur.name = data.name || cur.name;
+              cur.name = (data.display_name as string) || (data.name as string) || cur.name;
+              cur.display_name = data.display_name as string;
               cur.online = true;
               cur.lastSeen = Date.now();
               map.set(data.deviceId!, cur);
@@ -529,7 +542,7 @@ export default function DeviceControlPanel() {
           realtime.onBridge("device:heartbeat", (h: unknown) => {
             const id = (h as { deviceId?: string })?.deviceId;
             if (!id) return;
-            renderDevices((map) => {
+            renderDevices((map: Map<string, Device>) => {
               const cur: Device = map.get(id) || { id, deviceId: id, type: "unknown", name: id, online: false };
               cur.online = true;
               cur.lastSeen = Date.now();
@@ -546,7 +559,7 @@ export default function DeviceControlPanel() {
             // }
             const id = (s as { deviceId?: string })?.deviceId;
             if (!id) return;
-            renderDevices((map) => {
+            renderDevices((map: Map<string, Device>) => {
               const cur: Device = map.get(id) || { id, deviceId: id, type: "unknown", name: id, online: false };
               cur.online = true;
               cur.lastSeen = Date.now();
@@ -563,7 +576,7 @@ export default function DeviceControlPanel() {
             // }
             const id = (d as { deviceId?: string; type?: DeviceType })?.deviceId;
             if (!id) return;
-            renderDevices((map) => {
+            renderDevices((map: Map<string, Device>) => {
               const cur: Device = map.get(id) || {
                 id,
                 deviceId: id,
@@ -666,6 +679,8 @@ export default function DeviceControlPanel() {
     setSelectedJourneyIds([]);
     setSessionType(null);
     setCurrentStep("session-type");
+    // Reset the initial load ref to allow ongoing session detection on next mount
+    initialLoadRef.current = false;
   }, []);
 
   // const selectedVr = useMemo(() => vrDevices.find((d) => d.id === selectedVrId), [vrDevices, selectedVrId]);
@@ -695,7 +710,7 @@ export default function DeviceControlPanel() {
         }
       }
       // Update local pairs with session id
-      setPairs((prev) => prev.map((p) => ({ ...p, sessionId: sid })));
+      setPairs((prev: Pair[]) => prev.map((p: Pair) => ({ ...p, sessionId: sid })));
       setActiveSessionId(sid);
       setCurrentStep("controller");
       // Ensure journeys are loaded for Individual mode (chips list uses all journeys)
@@ -710,7 +725,7 @@ export default function DeviceControlPanel() {
       // Instruct all paired devices to join this session
       broadcastSessionJoin(
         sid,
-        pairs.map((p) => ({ ...p, sessionId: sid })),
+        pairs.map((p: Pair) => ({ ...p, sessionId: sid })),
       );
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -733,7 +748,7 @@ export default function DeviceControlPanel() {
         const langCode = j?.audio_tracks?.[0]?.language_code;
         defaultLang = typeof langCode === "string" ? langCode : null;
       }
-      const payloadMembers = pairs.map((p) => ({
+      const payloadMembers = pairs.map((p: Pair) => ({
         vrDeviceId: p.vrId,
         chairDeviceId: p.chairId,
         language: defaultLang || undefined,
@@ -741,20 +756,20 @@ export default function DeviceControlPanel() {
       const res = await createGroupSession({
         session_type: "group",
         members: payloadMembers,
-        journeyIds: selectedJourneyIds.map((id) => parseInt(id)),
+        journeyIds: selectedJourneyIds.map((id: string) => parseInt(id)),
       });
       const sid = res.session.id;
-      setPairs((prev) =>
-        prev.map((p) => ({ ...p, sessionId: sid, journeyId: selectedJourneyIds.map((id) => parseInt(id)) })),
+      setPairs((prev: Pair[]) =>
+        prev.map((p: Pair) => ({ ...p, sessionId: sid, journeyId: selectedJourneyIds.map((id: string) => parseInt(id)) })),
       );
       setActiveSessionId(sid);
       setCurrentStep("controller");
       log(`Group session created: ${sid} (group: ${res.groupId})`);
       // After creation, instruct all paired devices to join this session
-      const enriched = pairs.map((p) => ({
+      const enriched = pairs.map((p: Pair) => ({
         ...p,
         sessionId: sid,
-        journeyId: selectedJourneyIds.map((id) => parseInt(id)),
+        journeyId: selectedJourneyIds.map((id: string) => parseInt(id)),
       }));
       broadcastSessionJoin(sid, enriched);
     } catch (e) {
@@ -838,7 +853,7 @@ export default function DeviceControlPanel() {
               setSelectedVrId={setSelectedVrId}
               setSelectedChairId={setSelectedChairId}
               pairs={pairs}
-              setPairs={(updater) => setPairs((prev) => updater(prev))}
+              setPairs={(updater: (prev: Pair[]) => Pair[]) => setPairs((prev: Pair[]) => updater(prev))}
               onBack={resetFlow}
               onContinue={() => {
                 if (sessionType === "individual") {
@@ -864,11 +879,11 @@ export default function DeviceControlPanel() {
               sessionType={sessionType}
               selectedJourneyIds={selectedJourneyIds}
               setSelectedJourneyIds={(updater: (prev: string[]) => string[]) =>
-                setSelectedJourneyIds((prev) => updater(prev))
+                setSelectedJourneyIds((prev: string[]) => updater(prev))
               }
               selectedJourneyLangs={selectedJourneyLangs}
               setSelectedJourneyLangs={(updater: (prev: Record<string, string>) => Record<string, string>) =>
-                setSelectedJourneyLangs((prev) => updater(prev))
+                setSelectedJourneyLangs((prev: Record<string, string>) => updater(prev))
               }
               onCreateIndividual={() => void handleCreateIndividual()}
               onCreateGroup={() => void handleCreateGroup()}
@@ -881,16 +896,16 @@ export default function DeviceControlPanel() {
               activePair={activePairForController}
               journeys={journeys}
               seekValues={seekValues}
-              setSeekValues={(updater) => setSeekValues((prev) => updater(prev))}
+              setSeekValues={(updater: (prev: Record<string, number>) => Record<string, number>) => setSeekValues((prev: Record<string, number>) => updater(prev))}
               sendCmd={sendCmd}
               sendParticipantCmd={sendParticipantCmd}
               onNewSession={resetFlow}
               onResendSession={() => {
-                const targets = pairs.filter((p) => p.sessionId === activeSessionId);
+                const targets = pairs.filter((p: Pair) => p.sessionId === activeSessionId);
                 if (activeSessionId && targets.length) broadcastSessionJoin(activeSessionId, targets);
               }}
               pairs={pairs}
-              setPairs={(updater) => setPairs((prev) => updater(prev))}
+              setPairs={(updater: (prev: Pair[]) => Pair[]) => setPairs((prev: Pair[]) => updater(prev))}
               onlineById={onlineById}
               deviceInfoById={deviceInfoById}
               vrDevices={vrDevices}

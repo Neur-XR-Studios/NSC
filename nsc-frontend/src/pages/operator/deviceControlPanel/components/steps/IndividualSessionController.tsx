@@ -1,8 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Armchair, Headset, Dot, CirclePower, RefreshCw, InfoIcon, Users, X, Plus, Eye, ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  Armchair,
+  Headset,
+  Dot,
+  CirclePower,
+  RefreshCw,
+  InfoIcon,
+  Users,
+  X,
+  Plus,
+  Eye,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
 import type { JourneyItem } from "@/types/journey";
 import { VideoPlayer, type VideoPlayerHandle } from "@/components/media/VideoPlayer";
 import {
@@ -10,9 +23,11 @@ import {
   getSessionById,
   addParticipant as apiAddParticipant,
   removeParticipant as apiRemoveParticipant,
+  submitSessionFeedback,
   type SessionDetailsEnvelope,
 } from "@/lib/sessions";
 import type { BaseControllerProps } from "./types";
+import { SessionFeedbackModal } from "@/components/SessionFeedbackModal";
 
 export default function IndividualSessionController({
   activePair,
@@ -83,6 +98,13 @@ export default function IndividualSessionController({
   const [selectedChairId, setSelectedChairId] = useState("");
   const [showPairModal, setShowPairModal] = useState(false);
   const [selectedJourneyDetail, setSelectedJourneyDetail] = useState<JourneyItem | null>(null);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+
+  // Ref to track selectedJourneyByPair without triggering re-renders in the sync effect
+  const selectedJourneyByPairRef = useRef(selectedJourneyByPair);
+  useEffect(() => {
+    selectedJourneyByPairRef.current = selectedJourneyByPair;
+  }, [selectedJourneyByPair]);
 
   // Filter out already paired devices
   const pairedVrIds = useMemo(() => new Set(sessionPairs.map((p) => p.vrId)), [sessionPairs]);
@@ -201,7 +223,11 @@ export default function IndividualSessionController({
       const vrInfo = deviceInfoById[p.vrId];
       const chairInfo = deviceInfoById[p.chairId];
       const deviceJourneyId = vrInfo?.currentJourneyId ?? chairInfo?.currentJourneyId;
-      if (deviceJourneyId != null && selectedJourneyByPair[key] !== deviceJourneyId) {
+
+      // Use ref to check current state without adding it to dependencies
+      const currentSelected = selectedJourneyByPairRef.current[key];
+
+      if (deviceJourneyId != null && !Number.isNaN(Number(deviceJourneyId)) && currentSelected !== deviceJourneyId) {
         updatesSelected[key] = deviceJourneyId;
         const deviceLanguage = vrInfo?.language ?? chairInfo?.language;
         if (deviceLanguage) {
@@ -217,7 +243,76 @@ export default function IndividualSessionController({
     });
     if (Object.keys(updatesSelected).length) setSelectedJourneyByPair((prev) => ({ ...prev, ...updatesSelected }));
     if (Object.keys(updatesAudio).length) setAudioSel((prev) => ({ ...prev, ...updatesAudio }));
-  }, [deviceInfoById, sessionPairs, selectedJourneyByPair, journeys]);
+  }, [deviceInfoById, sessionPairs, journeys]);
+
+  // Memoized feedback modal callbacks to prevent infinite loop
+  const handleFeedbackSubmit = useCallback(
+    async (rating: number, feedbackText: string) => {
+      if (!activePair) return;
+      const sid = activePair.sessionId;
+
+      try {
+        // Submit feedback
+        await submitSessionFeedback(sid, rating, feedbackText);
+
+        // Stop session
+        sendCmd(sid, "stop");
+
+        // Clean up state
+        try {
+          setPairs?.((prev) => prev.filter((p) => p.sessionId !== sid));
+        } catch (e) {
+          void e;
+        }
+        try {
+          setParticipantIdByPair({});
+          setSelectedJourneyByPair({});
+          setAudioSel({});
+          if (sid) setSeekValues((prev) => ({ ...prev, [sid]: 0 }));
+        } catch (e) {
+          void e;
+        }
+
+        // Close modal and navigate
+        setShowFeedbackModal(false);
+        onNewSession();
+      } catch (error) {
+        console.error("Failed to submit feedback:", error);
+        // Still stop session even if feedback fails
+        sendCmd(sid, "stop");
+        setShowFeedbackModal(false);
+        onNewSession();
+      }
+    },
+    [activePair, sendCmd, setPairs, setSeekValues, onNewSession],
+  );
+
+  const handleFeedbackSkip = useCallback(() => {
+    if (!activePair) return;
+    const sid = activePair.sessionId;
+
+    // Stop session without feedback
+    sendCmd(sid, "stop");
+
+    // Clean up state
+    try {
+      setPairs?.((prev) => prev.filter((p) => p.sessionId !== sid));
+    } catch (e) {
+      void e;
+    }
+    try {
+      setParticipantIdByPair({});
+      setSelectedJourneyByPair({});
+      setAudioSel({});
+      if (sid) setSeekValues((prev) => ({ ...prev, [sid]: 0 }));
+    } catch (e) {
+      void e;
+    }
+
+    setShowFeedbackModal(false);
+    onNewSession();
+  }, [activePair, sendCmd, setPairs, setSeekValues, onNewSession]);
+
   return (
     <div className="space-y-6">
       <Card className="bg-slate-900/50 border-slate-800">
@@ -264,25 +359,7 @@ export default function IndividualSessionController({
             <Button
               onClick={() => {
                 if (!activePair) return;
-                const sid = activePair.sessionId;
-                // Send stop to backend
-                sendCmd(sid, "stop");
-                // Immediately unpair all devices from this session locally to avoid stale reloads
-                try {
-                  setPairs?.((prev) => prev.filter((p) => p.sessionId !== sid));
-                } catch (e) {
-                  void e;
-                }
-                try {
-                  setParticipantIdByPair({});
-                  setSelectedJourneyByPair({});
-                  setAudioSel({});
-                  if (sid) setSeekValues((prev) => ({ ...prev, [sid]: 0 }));
-                } catch (e) {
-                  void e;
-                }
-                // Navigate back to new session flow
-                onNewSession();
+                setShowFeedbackModal(true);
               }}
               variant="destructive"
               className="gap-2 text-base font-semibold"
@@ -380,9 +457,9 @@ export default function IndividualSessionController({
                               if (playing) {
                                 // Include current position to ensure resume on devices that require it
                                 const currentMs =
-                                typeof devicePositionMs === "number" && isFinite(devicePositionMs)
-                                ? devicePositionMs
-                                : playerRefs.current[key]?.getCurrentTimeMs() || 0;
+                                  typeof devicePositionMs === "number" && isFinite(devicePositionMs)
+                                    ? devicePositionMs
+                                    : playerRefs.current[key]?.getCurrentTimeMs() || 0;
                                 console.log("Play", { vrId: p.vrId, chairId: p.chairId }, "play", currentMs);
                                 sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "play", currentMs);
                               } else {
@@ -570,7 +647,10 @@ export default function IndividualSessionController({
                             {/* Carousel Navigation */}
                             <button
                               onClick={() => {
-                                const idx = Math.max(0, (allJourneyCards.findIndex((j) => Number(j.jid) === Number(currentJid)) || 0) - 1);
+                                const idx = Math.max(
+                                  0,
+                                  (allJourneyCards.findIndex((j) => Number(j.jid) === Number(currentJid)) || 0) - 1,
+                                );
                                 const journeyToSelect = allJourneyCards[idx];
                                 if (journeyToSelect) {
                                   const pid = participantIdByPair[key];
@@ -621,7 +701,7 @@ export default function IndividualSessionController({
                                   const isSelected = Number(currentJid) === Number(jc.jid);
                                   const thumb = jc.item.video?.thumbnail_url;
                                   const title = jc.item.journey?.title || jc.item.video?.title || "Untitled";
-                                  
+
                                   return (
                                     <div
                                       key={`${key}-jc-${jc.jid}`}
@@ -651,7 +731,8 @@ export default function IndividualSessionController({
                                         if (newTracks.length > 0) {
                                           const preferredTrack =
                                             newTracks.find(
-                                              (t: { url?: string; language_code?: string }) => t.language_code === language,
+                                              (t: { url?: string; language_code?: string }) =>
+                                                t.language_code === language,
                                             ) || newTracks[0];
                                           if (preferredTrack?.url) {
                                             setAudioSel((prev) => ({ ...prev, [key]: preferredTrack.url! }));
@@ -667,17 +748,11 @@ export default function IndividualSessionController({
                                       }}
                                     >
                                       {/* Card Image */}
-                                      <div
-                                        className="relative w-24 h-24 bg-slate-800"
-                                      >
+                                      <div className="relative w-24 h-24 bg-slate-800">
                                         {thumb && (
-                                          <img
-                                            src={thumb}
-                                            alt={title}
-                                            className="w-full h-full object-cover"
-                                          />
+                                          <img src={thumb} alt={title} className="w-full h-full object-cover" />
                                         )}
-                                        
+
                                         {/* Overlay with Eye Button */}
                                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
                                           <button
@@ -711,7 +786,9 @@ export default function IndividualSessionController({
                             {/* Next Button */}
                             <button
                               onClick={() => {
-                                const currentIdx = allJourneyCards.findIndex((j) => Number(j.jid) === Number(currentJid));
+                                const currentIdx = allJourneyCards.findIndex(
+                                  (j) => Number(j.jid) === Number(currentJid),
+                                );
                                 const idx = Math.min(allJourneyCards.length - 1, (currentIdx || 0) + 1);
                                 const journeyToSelect = allJourneyCards[idx];
                                 if (journeyToSelect) {
@@ -1053,7 +1130,9 @@ export default function IndividualSessionController({
                     {selectedJourneyDetail.journey?.title || selectedJourneyDetail.video?.title || "Untitled Journey"}
                   </h3>
                   <p className="text-sm text-slate-300">
-                    {selectedJourneyDetail.journey?.description || selectedJourneyDetail.video?.description || "No description available"}
+                    {selectedJourneyDetail.journey?.description ||
+                      selectedJourneyDetail.video?.description ||
+                      "No description available"}
                   </p>
                 </div>
 
@@ -1068,9 +1147,7 @@ export default function IndividualSessionController({
                     </div>
                     <div>
                       <span className="text-xs text-slate-400 uppercase">Format</span>
-                      <p className="text-sm font-medium text-white">
-                        {selectedJourneyDetail.video.mime_type || "MP4"}
-                      </p>
+                      <p className="text-sm font-medium text-white">{selectedJourneyDetail.video.mime_type || "MP4"}</p>
                     </div>
                   </div>
                 )}
@@ -1088,9 +1165,7 @@ export default function IndividualSessionController({
                           <div className="text-sm font-medium text-white">
                             {track.language_code || `Track ${idx + 1}`}
                           </div>
-                          <div className="text-xs text-slate-400">
-                            {track.title || "Audio Track"}
-                          </div>
+                          <div className="text-xs text-slate-400">{track.title || "Audio Track"}</div>
                         </div>
                       ))}
                     </div>
@@ -1122,6 +1197,15 @@ export default function IndividualSessionController({
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Session Feedback Modal */}
+      <SessionFeedbackModal
+        open={showFeedbackModal}
+        onOpenChange={setShowFeedbackModal}
+        sessionId={activePair?.sessionId || ""}
+        onSubmit={handleFeedbackSubmit}
+        onSkip={handleFeedbackSkip}
+      />
     </div>
   );
 }

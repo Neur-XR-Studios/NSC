@@ -14,37 +14,52 @@ export default function ControllerStep(props: Props) {
   const { sessionType } = props;
   const [sessionOfflineDevices, setSessionOfflineDevice] = useState<string[]>([]);
 
+  const { vrDevices, chairDevices, pairs } = props;
+
+  // DEBUG: Track renders
+  console.log("[ControllerStep] Render", { sessionType, offlineCount: sessionOfflineDevices.length });
+
   useEffect(() => {
-    if (props?.vrDevices && props?.chairDevices) {
-      if (props?.pairs) {
-        const vrDevice: Record<string, string> = {};
-        const chairDevice: Record<string, string> = {};
+    // DEBUG: Track effect execution
+    console.log("[ControllerStep] Checking offline devices", {
+      vrCount: vrDevices?.length,
+      chairCount: chairDevices?.length,
+      pairsCount: pairs?.length,
+    });
 
-        const AllPairDevices: Record<string, boolean> = {};
+    if (vrDevices && chairDevices && pairs) {
+      const vrDevice: Record<string, string> = {};
+      const chairDevice: Record<string, string> = {};
 
-        props.vrDevices.map((d: Device) => {
-          if (d.online) {
-            vrDevice[d.id] = d.id;
-          }
-        });
-        props.chairDevices.map((d: Device) => {
-          if (d.online) {
-            chairDevice[d.id] = d.id;
-          }
-        });
+      const AllPairDevices: Record<string, boolean> = {};
 
-        props.pairs.map((p: Pair) => {
-          AllPairDevices[p.vrId] = vrDevice[p.vrId] ? true : false;
-          AllPairDevices[p.chairId] = chairDevice[p.chairId] ? true : false;
-        });
-
-        if (AllPairDevices) {
-          const offlineDevices = Object.keys(AllPairDevices).filter((id) => AllPairDevices[id] === false);
-          setSessionOfflineDevice(offlineDevices);
+      vrDevices.forEach((d: Device) => {
+        if (d.online) {
+          vrDevice[d.id] = d.id;
         }
-      }
+      });
+      chairDevices.forEach((d: Device) => {
+        if (d.online) {
+          chairDevice[d.id] = d.id;
+        }
+      });
+
+      pairs.forEach((p: Pair) => {
+        AllPairDevices[p.vrId] = !!vrDevice[p.vrId];
+        AllPairDevices[p.chairId] = !!chairDevice[p.chairId];
+      });
+
+      const offlineDevices = Object.keys(AllPairDevices).filter((id) => AllPairDevices[id] === false);
+
+      setSessionOfflineDevice((prev) => {
+        // Only update if changed
+        if (JSON.stringify(prev) !== JSON.stringify(offlineDevices)) {
+          return offlineDevices;
+        }
+        return prev;
+      });
     }
-  }, [props]);
+  }, [vrDevices, chairDevices, pairs]);
 
   if (sessionType === "group") {
     return <GroupSessionController {...props} sessionOfflineDevices={sessionOfflineDevices} />;
