@@ -15,6 +15,7 @@ import SessionTypeStep from "./components/steps/SessionTypeStep";
 import JourneySelectionStep from "./components/steps/JourneySelectionStep";
 import DeviceSelectionStep from "./components/steps/DeviceSelectionStep";
 import ControllerStep from "./components/steps/ControllerStep";
+import LoggerPanel, { type LogEntry } from "./components/LoggerPanel";
 
 type DeviceType = "vr" | "chair" | "unknown";
 
@@ -124,32 +125,91 @@ export default function DeviceControlPanel() {
   const [selectedJourneyLangs, setSelectedJourneyLangs] = useState<Record<string, string>>({});
 
   // Logs
-  const [logs, setLogs] = useState<string[]>([]);
-  const logBoxRef = useRef<HTMLDivElement | null>(null);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [isLoggerOpen, setIsLoggerOpen] = useState(false);
 
-  const log = useCallback((msg: string) => {
+  const log = useCallback((entry: string | Partial<LogEntry>) => {
     const ts = new Date().toLocaleTimeString();
-    setLogs((prev) => [...prev, `[${ts}] ${msg}`].slice(-1000));
+    let newEntry: LogEntry;
+
+    if (typeof entry === "string") {
+      newEntry = {
+        id: Math.random().toString(36).slice(2),
+        timestamp: ts,
+        category: "system",
+        direction: "info",
+        eventType: "info",
+        summary: entry,
+      };
+    } else {
+      newEntry = {
+        id: Math.random().toString(36).slice(2),
+        timestamp: ts,
+        category: "system",
+        direction: "info",
+        eventType: "info",
+        summary: "Log entry",
+        ...entry,
+      } as LogEntry;
+    }
+    setLogs((prev) => [...prev, newEntry].slice(-1000));
   }, []);
+
+  // API wrapper for logging
+  const apiCall = useCallback(
+    async <T,>(method: string, url: string, fn: () => Promise<T>, summary?: string): Promise<T> => {
+      const start = Date.now();
+      try {
+        const res = await fn();
+        log({
+          category: "api",
+          direction: "in",
+          eventType: "success",
+          method,
+          url,
+          summary: summary || `${method} ${url}`,
+          details: { status: "success", duration: `${Date.now() - start}ms`, response: res },
+        });
+        return res;
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        log({
+          category: "api",
+          direction: "in",
+          eventType: "error",
+          method,
+          url,
+          summary: `FAILED: ${summary || `${method} ${url}`}`,
+          details: { status: "error", duration: `${Date.now() - start}ms`, error: message },
+        });
+        throw e;
+      }
+    },
+    [log],
+  );
 
   // Journeys loader (used by selection and when auto-locking into controller)
   const loadJourneys = useCallback(async () => {
     try {
       setJourneysLoading(true);
-      const res = await api.get<{ total?: number; page?: number; limit?: number; data?: { data: JourneyItem[] } }>(
-        "journeys",
-        { page: 1, limit: 24 },
+      const res = await apiCall(
+        "GET",
+        "/journeys",
+        () =>
+          api.get<{ total?: number; page?: number; limit?: number; data?: { data: JourneyItem[] } }>("journeys", {
+            page: 1,
+            limit: 24,
+          }),
+        "Fetch Journeys",
       );
       const list = (res?.data?.data as unknown as JourneyItem[]) || res?.data?.data || [];
       setJourneys(list);
-      log(`Journeys loaded: ${(list || []).length}`);
     } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : String(e);
-      log(`Journey load failed: ${message}`);
+      // Logged in apiCall
     } finally {
       setJourneysLoading(false);
     }
-  }, [log]);
+  }, [log, apiCall]);
 
   // Load ongoing sessions on initial mount to lock into controller if needed
   useEffect(() => {
@@ -157,9 +217,14 @@ export default function DeviceControlPanel() {
       // Prevent loading if we've already loaded the initial session
       if (initialLoadRef.current) return;
       initialLoadRef.current = true;
-      
+
       try {
-        const res = await api.get<SessionsEnvelope | { data?: SessionRec[] }>("sessions", { status: "on_going" });
+        const res = await apiCall(
+          "GET",
+          "/sessions?status=on_going",
+          () => api.get<SessionsEnvelope | { data?: SessionRec[] }>("sessions", { status: "on_going" }),
+          "Check Ongoing Sessions",
+        );
         const root = res?.data as SessionsEnvelope | { data?: SessionRec[] } | undefined;
         const list: SessionRec[] = Array.isArray((root as { data?: SessionRec[] })?.data)
           ? (root as { data?: SessionRec[] }).data || []
@@ -276,12 +341,6 @@ export default function DeviceControlPanel() {
     void loadOngoing();
   }, [loadJourneys, log]);
 
-  useEffect(() => {
-    if (logBoxRef.current) {
-      logBoxRef.current.scrollTop = logBoxRef.current.scrollHeight;
-    }
-  }, [logs]);
-
   const renderDevices = useCallback((updater: (prev: Map<string, Device>) => Map<string, Device>) => {
     setDevicesMap((prev: Map<string, Device>) => {
       const next = new Map(prev);
@@ -307,7 +366,28 @@ export default function DeviceControlPanel() {
       //   log(`Failed to publish topic: ${message}`);
       // }
       realtime.publish(topic, payload, retain, 1);
-      log(`${realtime.currentMode === "bridge" ? "Pub (bridge)" : "Pub"} ${topic} ${payload}`);
+
+      // Extract device ID if present
+      const deviceIdMatch = topic.match(/devices\/([^/]+)/);
+      const deviceId = deviceIdMatch ? deviceIdMatch[1] : undefined;
+
+      let eventType: "command" | "info" = "info";
+      if (topic.includes("/commands/")) eventType = "command";
+
+      let details: any = payload;
+      try {
+        details = JSON.parse(payload);
+      } catch (e) {}
+
+      log({
+        category: "mqtt",
+        direction: "out",
+        eventType,
+        topic,
+        deviceId,
+        summary: topic,
+        details,
+      });
     },
     [connected, log],
   );
@@ -348,6 +428,30 @@ export default function DeviceControlPanel() {
     (msg: { destinationName: string; payloadString?: string }) => {
       const t = msg.destinationName;
       const p = msg.payloadString || "";
+
+      // Extract device ID if present
+      const deviceIdMatch = t.match(/devices\/([^/]+)/);
+      const deviceId = deviceIdMatch ? deviceIdMatch[1] : undefined;
+
+      let eventType: "heartbeat" | "status" | "event" | "info" = "info";
+      if (t.endsWith("/heartbeat")) eventType = "heartbeat";
+      else if (t.endsWith("/status")) eventType = "status";
+      else if (t.endsWith("/events")) eventType = "event";
+
+      let details: any = p;
+      try {
+        details = JSON.parse(p);
+      } catch (e) {}
+
+      log({
+        category: "mqtt",
+        direction: "in",
+        eventType,
+        topic: t,
+        deviceId,
+        summary: t,
+        details,
+      });
       // Console label for inbound device-originated MQTT messages
       // try { console.log("[DEVICE→ADMIN MQTT]", t, p); } catch (e) {
       //   const message = e instanceof Error ? e.message : String(e);
@@ -355,7 +459,12 @@ export default function DeviceControlPanel() {
       // }
       try {
         if (t === "devices/discovery/announce") {
-          const d = JSON.parse(p || "{}") as { deviceId?: string; type?: DeviceType; name?: string; display_name?: string };
+          const d = JSON.parse(p || "{}") as {
+            deviceId?: string;
+            type?: DeviceType;
+            name?: string;
+            display_name?: string;
+          };
           const id = d.deviceId;
           if (!id) return;
           renderDevices((map: Map<string, Device>) => {
@@ -374,7 +483,14 @@ export default function DeviceControlPanel() {
           });
         } else if (t.startsWith("devices/") && t.endsWith("/status")) {
           const id = t.split("/")[1];
-          const data = JSON.parse(p || "{}") as { status?: string; type?: string; positionMs?: number; sessionId?: string; language?: string; display_name?: string };
+          const data = JSON.parse(p || "{}") as {
+            status?: string;
+            type?: string;
+            positionMs?: number;
+            sessionId?: string;
+            language?: string;
+            display_name?: string;
+          };
           renderDevices((map: Map<string, Device>) => {
             const cur: Device = map.get(id) || { id, type: "unknown", name: data?.display_name || id, online: false };
             const rawStatus = String((data && data.status) || "").toLowerCase();
@@ -418,7 +534,17 @@ export default function DeviceControlPanel() {
           });
         } else if (t.startsWith("devices/") && t.endsWith("/events")) {
           const id = t.split("/")[1];
-          const data = JSON.parse(p || "{}") as { event?: string; type?: string; journeyId?: number; playing?: boolean; positionMs?: number; sessionId?: string; language?: string; display_name?: string; timestamp?: string };
+          const data = JSON.parse(p || "{}") as {
+            event?: string;
+            type?: string;
+            journeyId?: number;
+            playing?: boolean;
+            positionMs?: number;
+            sessionId?: string;
+            language?: string;
+            display_name?: string;
+            timestamp?: string;
+          };
           const event = String(data?.event || "").toLowerCase();
           renderDevices((map: Map<string, Device>) => {
             const cur: Device = map.get(id) || { id, type: "unknown", name: data?.display_name || id, online: false };
@@ -498,7 +624,7 @@ export default function DeviceControlPanel() {
                       deviceId: d.deviceId as string,
                       type: (d.type as DeviceType) || "unknown",
                       name: (d.display_name as string) || (d.name as string) || (d.deviceId as string),
-                      display_name: (d.display_name as string),
+                      display_name: d.display_name as string,
                       online: true,
                       lastSeen: Date.now(),
                     });
@@ -661,8 +787,8 @@ export default function DeviceControlPanel() {
         timestamp: new Date().toISOString(),
       };
       // Look up hardware deviceId from device list (devices listen to their hardware ID, not database ID)
-      const vrDevice = devicesList.find(d => d.id === pair.vrId);
-      const chairDevice = devicesList.find(d => d.id === pair.chairId);
+      const vrDevice = devicesList.find((d) => d.id === pair.vrId);
+      const chairDevice = devicesList.find((d) => d.id === pair.chairId);
       const vrHwId = vrDevice?.deviceId || pair.vrId;
       const chairHwId = chairDevice?.deviceId || pair.chairId;
       publishTopic(`devices/${vrHwId}/commands/${type}`, JSON.stringify(payload), false);
@@ -694,11 +820,17 @@ export default function DeviceControlPanel() {
       const first = pairs[0];
       if (!first) return;
       // Create base individual session with the first pair; journeys optional/omitted
-      const rec = await createIndividualSession({
-        session_type: "individual",
-        vrDeviceId: first.vrId,
-        chairDeviceId: first.chairId,
-      });
+      const rec = await apiCall(
+        "POST",
+        "/sessions (individual)",
+        () =>
+          createIndividualSession({
+            session_type: "individual",
+            vrDeviceId: first.vrId,
+            chairDeviceId: first.chairId,
+          }),
+        "Create Individual Session",
+      );
       const sid = rec.id;
       // Attach remaining pairs as participants
       for (let i = 1; i < pairs.length; i++) {
@@ -753,14 +885,24 @@ export default function DeviceControlPanel() {
         chairDeviceId: p.chairId,
         language: defaultLang || undefined,
       }));
-      const res = await createGroupSession({
-        session_type: "group",
-        members: payloadMembers,
-        journeyIds: selectedJourneyIds.map((id: string) => parseInt(id)),
-      });
+      const res = await apiCall(
+        "POST",
+        "/sessions (group)",
+        () =>
+          createGroupSession({
+            session_type: "group",
+            members: payloadMembers,
+            journeyIds: selectedJourneyIds.map((id: string) => parseInt(id)),
+          }),
+        "Create Group Session",
+      );
       const sid = res.session.id;
       setPairs((prev: Pair[]) =>
-        prev.map((p: Pair) => ({ ...p, sessionId: sid, journeyId: selectedJourneyIds.map((id: string) => parseInt(id)) })),
+        prev.map((p: Pair) => ({
+          ...p,
+          sessionId: sid,
+          journeyId: selectedJourneyIds.map((id: string) => parseInt(id)),
+        })),
       );
       setActiveSessionId(sid);
       setCurrentStep("controller");
@@ -821,7 +963,13 @@ export default function DeviceControlPanel() {
     <div className="">
       <div className="container">
         {/* Progress Stepper */}
-        <ProgressStepper currentStepNumber={currentStepNumber} connected={connected} mode={mode} sessionType={sessionType} />
+        <ProgressStepper
+          currentStepNumber={currentStepNumber}
+          connected={connected}
+          mode={mode}
+          sessionType={sessionType}
+          onToggleLogger={() => setIsLoggerOpen(!isLoggerOpen)}
+        />
 
         {/* Main Content */}
         <div className="space-y-6">
@@ -896,7 +1044,9 @@ export default function DeviceControlPanel() {
               activePair={activePairForController}
               journeys={journeys}
               seekValues={seekValues}
-              setSeekValues={(updater: (prev: Record<string, number>) => Record<string, number>) => setSeekValues((prev: Record<string, number>) => updater(prev))}
+              setSeekValues={(updater: (prev: Record<string, number>) => Record<string, number>) =>
+                setSeekValues((prev: Record<string, number>) => updater(prev))
+              }
               sendCmd={sendCmd}
               sendParticipantCmd={sendParticipantCmd}
               onNewSession={resetFlow}
@@ -915,6 +1065,12 @@ export default function DeviceControlPanel() {
           )}
         </div>
       </div>
+      <LoggerPanel
+        logs={logs}
+        isOpen={isLoggerOpen}
+        onToggle={() => setIsLoggerOpen(!isLoggerOpen)}
+        onClear={() => setLogs([])}
+      />
     </div>
   );
 }

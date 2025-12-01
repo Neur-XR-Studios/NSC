@@ -1,20 +1,22 @@
-import { CheckCircle2, Wifi, WifiOff } from "lucide-react";
+import { CheckCircle2, Wifi, WifiOff, FileText } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 interface Props {
   currentStepNumber: number;
   connected: boolean;
   mode: "mqtt" | "bridge";
   sessionType?: "individual" | "group" | null;
+  onToggleLogger?: () => void;
 }
 
-export default function ProgressStepper({ currentStepNumber, connected, mode, sessionType }: Props) {
+export default function ProgressStepper({ currentStepNumber, connected, mode, sessionType, onToggleLogger }: Props) {
   const steps = [
     { key: "session-type", label: "Session Type" },
     { key: "device-selection", label: "Select Devices" },
     ...(sessionType === "individual" ? [] : [{ key: "journey-selection", label: "Choose Journey" }]),
     { key: "controller", label: "Control Session" },
   ] as const;
-  
+
   const modeLabel = mode === "mqtt" ? "MQTT" : "Bridge";
 
   return (
@@ -100,12 +102,16 @@ export default function ProgressStepper({ currentStepNumber, connected, mode, se
 
           {/* Mode Indicator */}
           <div
-            className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-slate-800/70 border border-slate-700/50 flex-1 lg:flex-initial"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-slate-800/70 border border-slate-700/50 flex-1 lg:flex-initial cursor-pointer"
             title={`Communication mode: ${modeLabel}`}
+            onClick={onToggleLogger}
           >
-            <span className="text-sm text-slate-400">Mode:</span>
             <span className="text-sm font-bold text-cyan-400">{modeLabel}</span>
+            <span className="text-sm font-bold text-cyan-400">Log</span>
+            <FileText className="w-4 h-4" aria-hidden="true" />
           </div>
+
+          {/* Logger Toggle */}
         </div>
       </div>
     </div>
