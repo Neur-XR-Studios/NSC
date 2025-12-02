@@ -286,19 +286,42 @@ class DeviceDiscoveryService {
   async handleLastWill(topic, payload) {
     try {
       const deviceId = topic.split('/')[1];
-      const data = JSON.parse(payload.toString());
+      const payloadStr = payload.toString().toLowerCase().trim();
+      
+      // LWT payload can be simple string "online"/"offline" or JSON
+      let isOffline = true;
+      if (payloadStr === 'online') {
+        isOffline = false;
+      } else if (payloadStr === 'offline') {
+        isOffline = true;
+      } else {
+        // Try parsing as JSON
+        try {
+          const data = JSON.parse(payloadStr);
+          isOffline = data.status === 'offline' || data.online === false;
+        } catch {
+          // Not JSON, assume offline if not "online"
+          isOffline = payloadStr !== 'online';
+        }
+      }
 
-      logger.info('[DeviceDiscovery] Last Will received', { deviceId });
+      logger.info('[DeviceDiscovery] Last Will received', { deviceId, isOffline, payload: payloadStr });
 
       const device = this.discoveredDevices.get(deviceId);
       if (device) {
-        device.online = false;
-        device.lastSeen = new Date();
+        if (isOffline) {
+          device.online = false;
+          device.lastSeen = new Date();
 
-        // Clear heartbeat timer
-        if (this.heartbeatTimers.has(deviceId)) {
-          clearTimeout(this.heartbeatTimers.get(deviceId));
-          this.heartbeatTimers.delete(deviceId);
+          // Clear heartbeat timer
+          if (this.heartbeatTimers.has(deviceId)) {
+            clearTimeout(this.heartbeatTimers.get(deviceId));
+            this.heartbeatTimers.delete(deviceId);
+          }
+        } else {
+          // Device is online (clearing its LWT)
+          device.online = true;
+          device.lastSeen = new Date();
         }
 
         // Publish snapshot to notify admin clients

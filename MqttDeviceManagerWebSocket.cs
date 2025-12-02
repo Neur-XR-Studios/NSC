@@ -19,7 +19,7 @@ using Newtonsoft.Json.Linq;
 // 3. Device appears online in admin panel
 // ============================================================================
 
-public class MqttDeviceManagerWebSocket : MonoBehaviour
+public class MqttDeviceManager : MonoBehaviour
 {
     #region Configuration
 
@@ -100,16 +100,16 @@ public class MqttDeviceManagerWebSocket : MonoBehaviour
 
     void Start()
     {
-        // Generate device ID if not set
+        // Use hardcoded device ID for testing, or generate one
         if (string.IsNullOrEmpty(deviceId))
         {
-            deviceId = PlayerPrefs.GetString("MQTT_DEVICE_ID", "");
+            // Try to get from PlayerPrefs first
+            deviceId = PlayerPrefs.GetString("VR_ID", "");
+            
+            // If still empty, use hardcoded test ID
             if (string.IsNullOrEmpty(deviceId))
             {
-                string prefix = deviceType == DeviceTypeEnum.VR ? "VR_" : "CHAIR_";
-                deviceId = prefix + Guid.NewGuid().ToString().Substring(0, 8).ToUpper();
-                PlayerPrefs.SetString("MQTT_DEVICE_ID", deviceId);
-                PlayerPrefs.Save();
+                deviceId = "7f3bc13265afce3118811aff7eeda4c69ebab27c";
             }
         }
 
@@ -119,6 +119,7 @@ public class MqttDeviceManagerWebSocket : MonoBehaviour
         }
 
         Debug.Log($"[MQTT Device] ID: {deviceId}, Type: {DeviceTypeString}");
+        Debug.Log($"[MQTT Device] Server: {serverAddress}:{serverPort}");
 
         // Auto-connect on start
         Connect();
@@ -169,65 +170,65 @@ public class MqttDeviceManagerWebSocket : MonoBehaviour
         // Test connection first
         StartCoroutine(TestConnectionAndConnect());
     }
-    
+
     private IEnumerator TestConnectionAndConnect()
     {
         // First test if backend is reachable
         string testUrl = $"{baseUrl}/api/mqtt/publish";
         Debug.Log($"[MQTT Device] 🔍 Testing connection to: {testUrl}");
-        
+
         var testPayload = new
         {
             topic = "test/unity/ping",
             payload = $"{{\"deviceId\":\"{deviceId}\",\"test\":true,\"timestamp\":\"{GetTimestamp()}\"}}",
             retain = false
         };
-        
+
         string jsonBody = JsonConvert.SerializeObject(testPayload);
         byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonBody);
-        
+
         using (var request = new UnityEngine.Networking.UnityWebRequest(testUrl, "POST"))
         {
             request.uploadHandler = new UnityEngine.Networking.UploadHandlerRaw(bodyRaw);
             request.downloadHandler = new UnityEngine.Networking.DownloadHandlerBuffer();
             request.SetRequestHeader("Content-Type", "application/json");
             request.timeout = 10;
-            
+
             Debug.Log($"[MQTT Device] 📤 Sending test request...");
-            
+
             yield return request.SendWebRequest();
-            
+
             Debug.Log($"[MQTT Device] Response Code: {request.responseCode}");
             Debug.Log($"[MQTT Device] Response: {request.downloadHandler.text}");
-            
+
             if (request.result == UnityEngine.Networking.UnityWebRequest.Result.Success)
             {
                 Debug.Log("[MQTT Device] ✅ Backend connection successful!");
-                
+
                 // Mark as connected and start operations
                 _isConnected = true;
-                
+
                 // Announce device
                 Debug.Log("[MQTT Device] 📢 Announcing device...");
                 AnnounceDevice();
-                
+
                 // Send initial status
                 Debug.Log("[MQTT Device] 📊 Sending initial status...");
                 SendStatus();
-                
+
                 // Publish online LWT
                 Debug.Log("[MQTT Device] 🟢 Publishing online LWT...");
                 PublishMessage(T_lwt, "online", true);
-                
+
                 // Start heartbeat
                 if (heartbeatCoroutine != null) StopCoroutine(heartbeatCoroutine);
                 heartbeatCoroutine = StartCoroutine(HeartbeatLoop());
                 Debug.Log("[MQTT Device] ❤️ Heartbeat started!");
-                
+
                 // Start polling for commands
                 if (pollingCoroutine != null) StopCoroutine(pollingCoroutine);
                 pollingCoroutine = StartCoroutine(PollForCommands());
-                
+
                 OnConnected?.Invoke();
                 Debug.Log("[MQTT Device] ✅ FULLY CONNECTED AND RUNNING!");
             }
