@@ -27,7 +27,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
-export type LogCategory = "mqtt" | "api" | "system";
+export type LogCategory = "mqtt" | "api" | "system" | "socket.io";
 export type LogDirection = "in" | "out" | "info";
 export type LogEventType = "command" | "heartbeat" | "status" | "event" | "info" | "error" | "success";
 
@@ -101,6 +101,8 @@ export default function LoggerPanel({ logs, isOpen, onToggle, onClear }: LoggerP
         return <Globe className="h-3.5 w-3.5" />;
       case "system":
         return <Monitor className="h-3.5 w-3.5" />;
+      case "socket.io":
+        return <Activity className="h-3.5 w-3.5" />;
     }
   };
 
@@ -176,8 +178,8 @@ export default function LoggerPanel({ logs, isOpen, onToggle, onClear }: LoggerP
             />
           </div>
           <Tabs value={categoryFilter} onValueChange={(v) => setCategoryFilter(v as any)} className="w-full">
-            <TabsList className="grid w-full grid-cols-4 h-7 bg-muted/50 p-0.5">
-              {["all", "mqtt", "api", "system"].map((tab) => (
+            <TabsList className="grid w-full grid-cols-5 h-7 bg-muted/50 p-0.5">
+              {["all", "mqtt", "api", "system", "socket.io"].map((tab) => (
                 <TabsTrigger
                   key={tab}
                   value={tab}
