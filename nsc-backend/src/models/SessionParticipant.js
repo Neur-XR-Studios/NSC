@@ -10,11 +10,11 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
     },
     vr_device_id: {
-      type: DataTypes.STRING(32),
+      type: DataTypes.STRING(128),
       allowNull: true,
     },
     chair_device_id: {
-      type: DataTypes.STRING(32),
+      type: DataTypes.STRING(128),
       allowNull: true,
     },
     participant_code: {

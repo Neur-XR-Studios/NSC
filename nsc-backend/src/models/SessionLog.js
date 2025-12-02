@@ -31,7 +31,7 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true,
     },
     vr_device_id: {
-      type: DataTypes.STRING(32),
+      type: DataTypes.STRING(128),
       allowNull: true,
     },
     position_ms: {
