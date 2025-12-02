@@ -11,6 +11,7 @@ const sessionRoute = require('./sessionRoute');
 const sessionLogRoute = require('./sessionLogRoute');
 const sessionFeedbackRoute = require('./sessionFeedbackRoute');
 const analyticsRoute = require('./analyticsRoute');
+const mqttRoute = require('./mqttRoute');
 const router = express.Router();
 
 const defaultRoutes = [
@@ -61,6 +62,10 @@ const defaultRoutes = [
     {
         path: '/analytics',
         route: analyticsRoute,
+    },
+    {
+        path: '/mqtt',
+        route: mqttRoute,
     },
 ];
 

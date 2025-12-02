@@ -2,49 +2,39 @@ using UnityEngine;
 using UnityEngine.Events;
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Text;
-using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using MQTTnet;
-using MQTTnet.Client;
-using MQTTnet.Protocol;
 
 // ============================================================================
-// PURE MQTT DEVICE MANAGER FOR UNITY
+// MQTT DEVICE MANAGER FOR UNITY - USING SOCKET.IO BRIDGE
 // ============================================================================
-// This script implements the same MQTT protocol as mqtt-vr-device.html
-// 
-// REQUIRED: Install MQTTnet package via NuGet
-// In Unity: Window > Package Manager > + > Add package from git URL
-// Or NuGet: Install-Package MQTTnet
+// This connects to your backend's Socket.IO bridge (port 8001) which forwards
+// messages to MQTT. NO EXTERNAL PACKAGES REQUIRED!
 //
-// MQTT TOPICS USED:
-// - devices/discovery/announce     (PUBLISH) - Announce device presence
-// - devices/{deviceId}/status      (PUBLISH) - Device status updates
-// - devices/{deviceId}/heartbeat   (PUBLISH) - Heartbeat every 5 seconds
-// - devices/{deviceId}/events      (PUBLISH) - User-triggered events
-// - devices/{deviceId}/lwt         (PUBLISH) - Last Will Testament (online/offline)
-// - devices/{deviceId}/commands/+  (SUBSCRIBE) - Receive commands from admin
-// - sessions/{sessionId}/commands/+ (SUBSCRIBE) - Receive session commands
+// How it works:
+// 1. Unity connects to backend via HTTP polling (simple GET/POST)
+// 2. Backend forwards messages to MQTT broker
+// 3. Device appears online in admin panel
 // ============================================================================
 
-public class MqttDeviceManager : MonoBehaviour
+public class MqttDeviceManagerWebSocket : MonoBehaviour
 {
     #region Configuration
 
-    [Header("🔌 MQTT Connection Settings")]
-    [Tooltip("MQTT Broker URL (without port)")]
-    public string brokerAddress = "192.168.0.190";
+    [Header("🔌 Connection Settings")]
+    [Tooltip("Backend server URL (e.g., 192.168.0.190)")]
+    public string serverAddress = "192.168.0.190";
 
-    [Tooltip("MQTT Broker Port (usually 1883 for TCP, 9001 for WebSocket)")]
-    public int brokerPort = 9001;
+    [Tooltip("Backend HTTP port (usually 8001)")]
+    public int serverPort = 8001;
 
     [Tooltip("Device ID - leave empty for auto-generation")]
     public string deviceId = "";
 
     [Tooltip("Device Type: vr or chair")]
-    public MQTTDeviceType deviceType = MQTTDeviceType.VR;
+    public DeviceTypeEnum deviceType = DeviceTypeEnum.VR;
 
     [Tooltip("Optional device display name")]
     public string displayName = "";
@@ -78,12 +68,9 @@ public class MqttDeviceManager : MonoBehaviour
 
     #region Private Fields
 
-    // MQTTnet client
-    private IMqttClient mqttClient;
-    private MqttFactory mqttFactory;
-
-    private float heartbeatTimer = 0f;
     private Coroutine heartbeatCoroutine;
+    private Coroutine pollingCoroutine;
+    private string baseUrl => $"http://{serverAddress}:{serverPort}";
 
     #endregion
 
@@ -106,8 +93,6 @@ public class MqttDeviceManager : MonoBehaviour
     private string T_heartbeat => $"devices/{deviceId}/heartbeat";
     private string T_events => $"devices/{deviceId}/events";
     private string T_lwt => $"devices/{deviceId}/lwt";
-    private string T_commands => $"devices/{deviceId}/commands/+";
-    private string T_session_commands(string sid) => $"sessions/{sid}/commands/+";
 
     #endregion
 
@@ -118,10 +103,10 @@ public class MqttDeviceManager : MonoBehaviour
         // Generate device ID if not set
         if (string.IsNullOrEmpty(deviceId))
         {
-            deviceId = PlayerPrefs.GetString("VR_ID", "");
+            deviceId = PlayerPrefs.GetString("MQTT_DEVICE_ID", "");
             if (string.IsNullOrEmpty(deviceId))
             {
-                string prefix = deviceType == MQTTDeviceType.VR ? "VR_" : "CHAIR_";
+                string prefix = deviceType == DeviceTypeEnum.VR ? "VR_" : "CHAIR_";
                 deviceId = prefix + Guid.NewGuid().ToString().Substring(0, 8).ToUpper();
                 PlayerPrefs.SetString("MQTT_DEVICE_ID", deviceId);
                 PlayerPrefs.Save();
@@ -134,7 +119,7 @@ public class MqttDeviceManager : MonoBehaviour
         }
 
         Debug.Log($"[MQTT Device] ID: {deviceId}, Type: {DeviceTypeString}");
-        
+
         // Auto-connect on start
         Connect();
     }
@@ -163,7 +148,7 @@ public class MqttDeviceManager : MonoBehaviour
     #region Connection
 
     /// <summary>
-    /// Connect to MQTT broker
+    /// Connect to backend and start sending heartbeats
     /// </summary>
     public void Connect()
     {
@@ -173,107 +158,34 @@ public class MqttDeviceManager : MonoBehaviour
             return;
         }
 
-        Debug.Log($"[MQTT Device] Connecting to {brokerAddress}:{brokerPort}...");
-        
-        // Start async connection
-        _ = ConnectAsync();
-    }
-    
-    private async Task ConnectAsync()
-    {
-        try
-        {
-            // Create MQTT factory and client
-            mqttFactory = new MqttFactory();
-            mqttClient = mqttFactory.CreateMqttClient();
-            
-            // Set up message received handler
-            mqttClient.ApplicationMessageReceivedAsync += OnMqttMsgReceived;
-            
-            // Generate unique client ID
-            string clientId = deviceId + "_" + DateTime.Now.Ticks;
-            
-            // Build connection options with WebSocket and LWT
-            var options = new MqttClientOptionsBuilder()
-                .WithWebSocketServer($"ws://{brokerAddress}:{brokerPort}")
-                .WithClientId(clientId)
-                .WithCleanSession(true)
-                .WithKeepAlivePeriod(TimeSpan.FromSeconds(60))
-                .WithWillTopic(T_lwt)
-                .WithWillPayload(Encoding.UTF8.GetBytes("offline"))
-                .WithWillRetain(true)
-                .WithWillQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
-                .Build();
-            
-            // Connect
-            var result = await mqttClient.ConnectAsync(options);
-            
-            if (result.ResultCode == MqttClientConnectResultCode.Success)
-            {
-                // Run on main thread
-                UnityMainThreadDispatcher.Instance().Enqueue(() => {
-                    OnConnectedToMqtt();
-                });
-            }
-            else
-            {
-                Debug.LogError($"[MQTT Device] ❌ Failed to connect: {result.ResultCode}");
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"[MQTT Device] ❌ Connection error: {ex.Message}");
-        }
-    }
+        Debug.Log($"[MQTT Device] Connecting to {baseUrl}...");
 
-    // MQTTnet message received callback
-    private Task OnMqttMsgReceived(MqttApplicationMessageReceivedEventArgs e)
-    {
-        string topic = e.ApplicationMessage.Topic;
-        string payload = Encoding.UTF8.GetString(e.ApplicationMessage.PayloadSegment);
-        
-        // Process on main thread
-        UnityMainThreadDispatcher.Instance().Enqueue(() => {
-            OnMqttMessageReceived(topic, payload);
-        });
-        
-        return Task.CompletedTask;
-    }
-
-    private void OnConnectedToMqtt()
-    {
+        // Mark as connected and start operations
         _isConnected = true;
-        Debug.Log("[MQTT Device] ✅ Connected to MQTT broker");
+        Debug.Log("[MQTT Device] ✅ Connected!");
 
-        // Subscribe to command topics
-        Subscribe(T_commands);
-
-        // If we have a saved session, subscribe to it
-        string savedSession = PlayerPrefs.GetString("MQTT_SESSION_ID", "");
-        if (!string.IsNullOrEmpty(savedSession))
-        {
-            _currentSessionId = savedSession;
-            Subscribe(T_session_commands(savedSession));
-        }
-
-        // Announce device (retained)
+        // Announce device
         AnnounceDevice();
 
-        // Send initial status (retained)
+        // Send initial status
         SendStatus();
 
-        // Clear LWT (mark as online)
-        Publish(T_lwt, "online", retain: true);
+        // Publish online LWT
+        PublishMessage(T_lwt, "online", true);
 
         // Start heartbeat
         if (heartbeatCoroutine != null) StopCoroutine(heartbeatCoroutine);
         heartbeatCoroutine = StartCoroutine(HeartbeatLoop());
 
+        // Start polling for commands
+        if (pollingCoroutine != null) StopCoroutine(pollingCoroutine);
+        pollingCoroutine = StartCoroutine(PollForCommands());
+
         OnConnected?.Invoke();
     }
 
     /// <summary>
-    /// Disconnect from MQTT broker
+    /// Disconnect from backend
     /// </summary>
     public void Disconnect()
     {
@@ -281,104 +193,113 @@ public class MqttDeviceManager : MonoBehaviour
 
         Debug.Log("[MQTT Device] Disconnecting...");
 
-        // Publish offline LWT before disconnecting
-        Publish(T_lwt, "offline", retain: true);
+        // Publish offline LWT
+        PublishMessage(T_lwt, "offline", true);
 
-        // Stop heartbeat
+        // Stop coroutines
         if (heartbeatCoroutine != null)
         {
             StopCoroutine(heartbeatCoroutine);
             heartbeatCoroutine = null;
         }
 
-        // Disconnect MQTT client
-        _ = DisconnectAsync();
-    }
-    
-    private async Task DisconnectAsync()
-    {
-        if (mqttClient != null && mqttClient.IsConnected)
+        if (pollingCoroutine != null)
         {
-            try
-            {
-                await mqttClient.DisconnectAsync();
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"[MQTT Device] Disconnect error: {ex.Message}");
-            }
+            StopCoroutine(pollingCoroutine);
+            pollingCoroutine = null;
         }
-        mqttClient = null;
-        mqttFactory = null;
 
         _isConnected = false;
-        
-        UnityMainThreadDispatcher.Instance().Enqueue(() => {
-            OnDisconnected?.Invoke();
-        });
+        OnDisconnected?.Invoke();
     }
 
     #endregion
 
-    #region MQTT Operations
+    #region MQTT Operations via HTTP
 
-    private void Subscribe(string topic)
+    /// <summary>
+    /// Publish a message to MQTT via backend HTTP API
+    /// </summary>
+    private void PublishMessage(string topic, string payload, bool retain = false)
     {
-        if (!_isConnected || mqttClient == null) return;
+        if (!_isConnected) return;
 
-        Debug.Log($"[MQTT Device] 📥 Subscribing to: {topic}");
-        
-        _ = SubscribeAsync(topic);
-    }
-    
-    private async Task SubscribeAsync(string topic)
-    {
-        try
-        {
-            var options = new MqttClientSubscribeOptionsBuilder()
-                .WithTopicFilter(topic, MqttQualityOfServiceLevel.AtLeastOnce)
-                .Build();
-                
-            await mqttClient.SubscribeAsync(options);
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"[MQTT Device] Subscribe error: {ex.Message}");
-        }
+        StartCoroutine(PublishCoroutine(topic, payload, retain));
     }
 
-    private void Publish(string topic, string payload, bool retain = false)
+    private IEnumerator PublishCoroutine(string topic, string payload, bool retain)
     {
-        if (!_isConnected || mqttClient == null) return;
+        string url = $"{baseUrl}/api/mqtt/publish";
 
-        Debug.Log($"[MQTT Device] 📤 Publishing to {topic}: {payload.Substring(0, Math.Min(100, payload.Length))}...");
-        
-        _ = PublishAsync(topic, payload, retain);
-    }
-    
-    private async Task PublishAsync(string topic, string payload, bool retain)
-    {
-        try
+        var requestBody = new
         {
-            var message = new MqttApplicationMessageBuilder()
-                .WithTopic(topic)
-                .WithPayload(payload)
-                .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
-                .WithRetainFlag(retain)
-                .Build();
-                
-            await mqttClient.PublishAsync(message);
-        }
-        catch (Exception ex)
+            topic = topic,
+            payload = payload,
+            retain = retain
+        };
+
+        string jsonBody = JsonConvert.SerializeObject(requestBody);
+        byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonBody);
+
+        using (var request = new UnityEngine.Networking.UnityWebRequest(url, "POST"))
         {
-            Debug.LogError($"[MQTT Device] Publish error: {ex.Message}");
+            request.uploadHandler = new UnityEngine.Networking.UploadHandlerRaw(bodyRaw);
+            request.downloadHandler = new UnityEngine.Networking.DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+
+            yield return request.SendWebRequest();
+
+            if (request.result == UnityEngine.Networking.UnityWebRequest.Result.Success)
+            {
+                Debug.Log($"[MQTT Device] 📤 Published to {topic}");
+            }
+            else
+            {
+                Debug.LogWarning($"[MQTT Device] Publish failed: {request.error}");
+            }
         }
     }
 
-    private void Publish(string topic, object payload, bool retain = false)
+    private IEnumerator PollForCommands()
     {
-        string json = JsonConvert.SerializeObject(payload);
-        Publish(topic, json, retain);
+        while (_isConnected)
+        {
+            yield return new WaitForSeconds(2f);
+
+            string url = $"{baseUrl}/api/mqtt/commands/{deviceId}";
+
+            using (var request = UnityEngine.Networking.UnityWebRequest.Get(url))
+            {
+                yield return request.SendWebRequest();
+
+                if (request.result == UnityEngine.Networking.UnityWebRequest.Result.Success)
+                {
+                    string response = request.downloadHandler.text;
+                    if (!string.IsNullOrEmpty(response) && response != "[]")
+                    {
+                        try
+                        {
+                            var commands = JsonConvert.DeserializeObject<List<CommandMessage>>(response);
+                            foreach (var cmd in commands)
+                            {
+                                HandleCommand(cmd.command, cmd.payload);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"[MQTT Device] Command parse error: {ex.Message}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    [Serializable]
+    private class CommandMessage
+    {
+        public string command;
+        public string payload;
     }
 
     #endregion
@@ -401,15 +322,10 @@ public class MqttDeviceManager : MonoBehaviour
             timestamp = GetTimestamp()
         };
 
-        // Always serialize to JSON! 🔥
         string json = JsonConvert.SerializeObject(payload);
-
-        // Publish JSON string
-        Publish(T_discovery_announce, json, retain: true);
-
+        PublishMessage(T_discovery_announce, json, true);
         Debug.Log($"[MQTT Device] 📢 Device announced: {json}");
     }
-
 
     /// <summary>
     /// Send current device status
@@ -431,15 +347,10 @@ public class MqttDeviceManager : MonoBehaviour
             timestamp = GetTimestamp()
         };
 
-        // Serialize using Newtonsoft
         string json = JsonConvert.SerializeObject(payload);
-
-        // Publish JSON string (NOT object!)
-        Publish(T_status, json, retain: true);
-
+        PublishMessage(T_status, json, true);
         Debug.Log($"[MQTT Device] 📊 Status sent: {json}");
     }
-
 
     private IEnumerator HeartbeatLoop()
     {
@@ -462,22 +373,17 @@ public class MqttDeviceManager : MonoBehaviour
             timestamp = GetTimestamp()
         };
 
-        // Convert to JSON string
         string json = JsonConvert.SerializeObject(payload);
-
-        // Publish JSON string
-        Publish(T_heartbeat, json, retain: false);
-
-        Debug.Log($"[MQTT Device] ❤️ Heartbeat Sent: {json}");
+        PublishMessage(T_heartbeat, json, false);
+        Debug.Log($"[MQTT Device] ❤️ Heartbeat: {json}");
     }
-
 
     #endregion
 
     #region Events (Device -> Admin)
 
     /// <summary>
-    /// Send an event to the admin panel (e.g., play, pause, seek)
+    /// Send an event to the admin panel
     /// </summary>
     public void SendEvent(string eventName, object extra = null)
     {
@@ -493,7 +399,6 @@ public class MqttDeviceManager : MonoBehaviour
             ["timestamp"] = GetTimestamp()
         };
 
-        // Merge extra properties if provided
         if (extra != null)
         {
             var extraObj = JObject.FromObject(extra);
@@ -503,13 +408,10 @@ public class MqttDeviceManager : MonoBehaviour
             }
         }
 
-        Publish(T_events, payload.ToString(), retain: false);
+        PublishMessage(T_events, payload.ToString(), false);
         Debug.Log($"[MQTT Device] 📤 Event: {eventName}");
     }
 
-    /// <summary>
-    /// Call this when user starts playback
-    /// </summary>
     public void OnUserPlay()
     {
         _isPlaying = true;
@@ -517,9 +419,6 @@ public class MqttDeviceManager : MonoBehaviour
         SendStatus();
     }
 
-    /// <summary>
-    /// Call this when user pauses playback
-    /// </summary>
     public void OnUserPause()
     {
         _isPlaying = false;
@@ -527,18 +426,12 @@ public class MqttDeviceManager : MonoBehaviour
         SendStatus();
     }
 
-    /// <summary>
-    /// Call this when user seeks to a position
-    /// </summary>
     public void OnUserSeek(float positionMs)
     {
         _currentPositionMs = positionMs;
         SendEvent("seek", new { positionMs = Mathf.FloorToInt(positionMs) });
     }
 
-    /// <summary>
-    /// Call this when playback ends
-    /// </summary>
     public void OnPlaybackEnded()
     {
         _isPlaying = false;
@@ -550,9 +443,6 @@ public class MqttDeviceManager : MonoBehaviour
 
     #region Session Management
 
-    /// <summary>
-    /// Join a session
-    /// </summary>
     public void JoinSession(string sessionId)
     {
         if (string.IsNullOrEmpty(sessionId))
@@ -565,18 +455,11 @@ public class MqttDeviceManager : MonoBehaviour
         PlayerPrefs.SetString("MQTT_SESSION_ID", sessionId);
         PlayerPrefs.Save();
 
-        // Subscribe to session commands
-        Subscribe(T_session_commands(sessionId));
-
         SendStatus();
         Debug.Log($"[MQTT Device] 🔗 Joined session: {sessionId}");
-
         OnSessionJoined?.Invoke(sessionId);
     }
 
-    /// <summary>
-    /// Leave current session
-    /// </summary>
     public void LeaveSession()
     {
         string oldSession = _currentSessionId;
@@ -587,13 +470,9 @@ public class MqttDeviceManager : MonoBehaviour
 
         SendStatus();
         Debug.Log($"[MQTT Device] 🔓 Left session: {oldSession}");
-
         OnSessionLeft?.Invoke();
     }
 
-    /// <summary>
-    /// Select a journey for playback
-    /// </summary>
     public void SelectJourney(int journeyId, string language = "")
     {
         _currentJourneyId = journeyId.ToString();
@@ -602,50 +481,12 @@ public class MqttDeviceManager : MonoBehaviour
 
         SendEvent("select_journey", new { journeyId = journeyId, language = language });
         SendStatus();
-
         Debug.Log($"[MQTT Device] 🎬 Selected journey: {journeyId}");
     }
 
     #endregion
 
-    #region Receiving Commands
-
-    /// <summary>
-    /// Called when MQTT message is received
-    /// Override this or connect to your MQTT client's message handler
-    /// </summary>
-    public void OnMqttMessageReceived(string topic, string payload)
-    {
-        Debug.Log($"[MQTT Device] 📨 Received: {topic}");
-
-        try
-        {
-            // Check if it's a command for this device
-            string deviceCmdPrefix = $"devices/{deviceId}/commands/";
-            if (topic.StartsWith(deviceCmdPrefix))
-            {
-                string command = topic.Substring(deviceCmdPrefix.Length);
-                HandleCommand(command, payload);
-                return;
-            }
-
-            // Check if it's a session command
-            if (!string.IsNullOrEmpty(_currentSessionId))
-            {
-                string sessionCmdPrefix = $"sessions/{_currentSessionId}/commands/";
-                if (topic.StartsWith(sessionCmdPrefix))
-                {
-                    string command = topic.Substring(sessionCmdPrefix.Length);
-                    HandleCommand(command, payload);
-                    return;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"[MQTT Device] Error handling message: {ex.Message}");
-        }
-    }
+    #region Command Handling
 
     private void HandleCommand(string command, string payloadJson)
     {
@@ -741,17 +582,11 @@ public class MqttDeviceManager : MonoBehaviour
         return DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
     }
 
-    /// <summary>
-    /// Set current playback position (call from your video player)
-    /// </summary>
     public void SetPosition(float positionMs)
     {
         _currentPositionMs = positionMs;
     }
 
-    /// <summary>
-    /// Set playing state (call from your video player)
-    /// </summary>
     public void SetPlaying(bool playing)
     {
         if (_isPlaying != playing)
@@ -764,49 +599,8 @@ public class MqttDeviceManager : MonoBehaviour
     #endregion
 }
 
-public enum MQTTDeviceType
+public enum DeviceTypeEnum
 {
     VR,
     Chair
-}
-
-// ============================================================================
-// UNITY MAIN THREAD DISPATCHER
-// ============================================================================
-// Required for processing MQTT callbacks on the main Unity thread
-// ============================================================================
-public class UnityMainThreadDispatcher : MonoBehaviour
-{
-    private static UnityMainThreadDispatcher _instance;
-    private readonly System.Collections.Generic.Queue<Action> _executionQueue = new System.Collections.Generic.Queue<Action>();
-
-    public static UnityMainThreadDispatcher Instance()
-    {
-        if (_instance == null)
-        {
-            var go = new GameObject("UnityMainThreadDispatcher");
-            _instance = go.AddComponent<UnityMainThreadDispatcher>();
-            DontDestroyOnLoad(go);
-        }
-        return _instance;
-    }
-
-    public void Enqueue(Action action)
-    {
-        lock (_executionQueue)
-        {
-            _executionQueue.Enqueue(action);
-        }
-    }
-
-    void Update()
-    {
-        lock (_executionQueue)
-        {
-            while (_executionQueue.Count > 0)
-            {
-                _executionQueue.Dequeue().Invoke();
-            }
-        }
-    }
 }

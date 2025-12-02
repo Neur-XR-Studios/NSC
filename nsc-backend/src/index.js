@@ -29,6 +29,10 @@ if (!process.env.BASE_URL) {
 
 // Initialize MQTT connection
 mqttService.connect();
+
+// Expose MQTT client to app for use in routes
+app.set('mqttClient', mqttService.client);
+
 // Proactively request device announcements shortly after startup
 setTimeout(() => {
     try {

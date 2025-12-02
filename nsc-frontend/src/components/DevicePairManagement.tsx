@@ -45,6 +45,7 @@ export default function DevicePairManagement() {
       // Handle heartbeats - device is online if sending heartbeats
       if (topic.match(/^devices\/[^/]+\/heartbeat$/)) {
         const deviceId = topic.split("/")[1];
+        console.log(`[DevicePairManagement] Heartbeat from ${deviceId}`);
         setOnlineDeviceIds(prev => {
           const next = new Set(prev);
           next.add(deviceId);
@@ -87,13 +88,27 @@ export default function DevicePairManagement() {
     const connectMqtt = async () => {
       try {
         const wsHost = window.location.hostname || "localhost";
-        await realtime.connect({ url: `ws://${wsHost}:9001`, clientId: `admin-devices-${Date.now()}` });
+        
+        // Check if already connected
+        if (!realtime.isConnected) {
+          console.log("[DevicePairManagement] Connecting to MQTT...");
+          // Use forceBridge to use Socket.IO bridge instead of raw MQTT (avoids Paho issues)
+          await realtime.connect({ 
+            url: `http://${wsHost}:8001`, 
+            clientId: `admin-devices-${Date.now()}`,
+            forceBridge: true 
+          });
+        } else {
+          console.log("[DevicePairManagement] MQTT already connected");
+        }
         
         // Subscribe to device topics
         realtime.subscribe("devices/+/status", 1);
         realtime.subscribe("devices/+/heartbeat", 1);
         realtime.subscribe("devices/+/lwt", 1);
         realtime.subscribe("admin/devices/snapshot", 1);
+        
+        console.log("[DevicePairManagement] Subscribed to device topics");
         
         // Request snapshot
         realtime.publish("admin/devices/snapshot/request", "{}", false);
@@ -102,11 +117,12 @@ export default function DevicePairManagement() {
       }
     };
     
-    realtime.onMessage(handleMqttMessage);
+    // Register message handler
+    const unsubscribe = realtime.onMessage(handleMqttMessage);
     void connectMqtt();
     
     return () => {
-      // Cleanup handled by realtime singleton
+      unsubscribe();
     };
   }, [handleMqttMessage]);
 
@@ -176,16 +192,13 @@ export default function DevicePairManagement() {
     setBundleModalOpen(true);
   };
 
-  // Check if device is online - prefer real-time MQTT status, fallback to lastSeenAt
-  const isDeviceOnline = (deviceId?: string, lastSeenAt?: string) => {
-    // First check real-time MQTT status
-    if (deviceId && onlineDeviceIds.has(deviceId)) {
-      return true;
-    }
-    // Fallback to lastSeenAt from database
-    if (!lastSeenAt) return false;
-    const threshold = 30 * 1000; // 30 seconds
-    return Date.now() - new Date(lastSeenAt).getTime() < threshold;
+  // Check if device is online - ONLY use real-time MQTT status
+  // No fallback to lastSeenAt to avoid showing stale data as online
+  const isDeviceOnline = (deviceId?: string) => {
+    if (!deviceId) return false;
+    const isOnline = onlineDeviceIds.has(deviceId);
+    console.log(`[DevicePairManagement] isDeviceOnline(${deviceId}) = ${isOnline}, onlineDevices:`, Array.from(onlineDeviceIds));
+    return isOnline;
   };
 
   return (
@@ -229,8 +242,8 @@ export default function DevicePairManagement() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {pairs.map((pair) => {
-            const vrOnline = isDeviceOnline(pair.vr?.deviceId || pair.vr_device_id, pair.vr?.lastSeenAt);
-            const chairOnline = isDeviceOnline(pair.chair?.deviceId || pair.chair_device_id, pair.chair?.lastSeenAt);
+            const vrOnline = isDeviceOnline(pair.vr?.deviceId || pair.vr_device_id);
+            const chairOnline = isDeviceOnline(pair.chair?.deviceId || pair.chair_device_id);
             const bothOnline = vrOnline && chairOnline;
 
             return (
