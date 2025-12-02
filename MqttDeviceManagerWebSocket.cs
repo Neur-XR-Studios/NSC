@@ -158,30 +158,96 @@ public class MqttDeviceManagerWebSocket : MonoBehaviour
             return;
         }
 
-        Debug.Log($"[MQTT Device] Connecting to {baseUrl}...");
+        Debug.Log("========================================");
+        Debug.Log("[MQTT Device] 🚀 STARTING CONNECTION...");
+        Debug.Log($"[MQTT Device] Server: {serverAddress}:{serverPort}");
+        Debug.Log($"[MQTT Device] Base URL: {baseUrl}");
+        Debug.Log($"[MQTT Device] Device ID: {deviceId}");
+        Debug.Log($"[MQTT Device] Device Type: {DeviceTypeString}");
+        Debug.Log("========================================");
 
-        // Mark as connected and start operations
-        _isConnected = true;
-        Debug.Log("[MQTT Device] ✅ Connected!");
-
-        // Announce device
-        AnnounceDevice();
-
-        // Send initial status
-        SendStatus();
-
-        // Publish online LWT
-        PublishMessage(T_lwt, "online", true);
-
-        // Start heartbeat
-        if (heartbeatCoroutine != null) StopCoroutine(heartbeatCoroutine);
-        heartbeatCoroutine = StartCoroutine(HeartbeatLoop());
-
-        // Start polling for commands
-        if (pollingCoroutine != null) StopCoroutine(pollingCoroutine);
-        pollingCoroutine = StartCoroutine(PollForCommands());
-
-        OnConnected?.Invoke();
+        // Test connection first
+        StartCoroutine(TestConnectionAndConnect());
+    }
+    
+    private IEnumerator TestConnectionAndConnect()
+    {
+        // First test if backend is reachable
+        string testUrl = $"{baseUrl}/api/mqtt/publish";
+        Debug.Log($"[MQTT Device] 🔍 Testing connection to: {testUrl}");
+        
+        var testPayload = new
+        {
+            topic = "test/unity/ping",
+            payload = $"{{\"deviceId\":\"{deviceId}\",\"test\":true,\"timestamp\":\"{GetTimestamp()}\"}}",
+            retain = false
+        };
+        
+        string jsonBody = JsonConvert.SerializeObject(testPayload);
+        byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonBody);
+        
+        using (var request = new UnityEngine.Networking.UnityWebRequest(testUrl, "POST"))
+        {
+            request.uploadHandler = new UnityEngine.Networking.UploadHandlerRaw(bodyRaw);
+            request.downloadHandler = new UnityEngine.Networking.DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+            request.timeout = 10;
+            
+            Debug.Log($"[MQTT Device] 📤 Sending test request...");
+            
+            yield return request.SendWebRequest();
+            
+            Debug.Log($"[MQTT Device] Response Code: {request.responseCode}");
+            Debug.Log($"[MQTT Device] Response: {request.downloadHandler.text}");
+            
+            if (request.result == UnityEngine.Networking.UnityWebRequest.Result.Success)
+            {
+                Debug.Log("[MQTT Device] ✅ Backend connection successful!");
+                
+                // Mark as connected and start operations
+                _isConnected = true;
+                
+                // Announce device
+                Debug.Log("[MQTT Device] 📢 Announcing device...");
+                AnnounceDevice();
+                
+                // Send initial status
+                Debug.Log("[MQTT Device] 📊 Sending initial status...");
+                SendStatus();
+                
+                // Publish online LWT
+                Debug.Log("[MQTT Device] 🟢 Publishing online LWT...");
+                PublishMessage(T_lwt, "online", true);
+                
+                // Start heartbeat
+                if (heartbeatCoroutine != null) StopCoroutine(heartbeatCoroutine);
+                heartbeatCoroutine = StartCoroutine(HeartbeatLoop());
+                Debug.Log("[MQTT Device] ❤️ Heartbeat started!");
+                
+                // Start polling for commands
+                if (pollingCoroutine != null) StopCoroutine(pollingCoroutine);
+                pollingCoroutine = StartCoroutine(PollForCommands());
+                
+                OnConnected?.Invoke();
+                Debug.Log("[MQTT Device] ✅ FULLY CONNECTED AND RUNNING!");
+            }
+            else
+            {
+                Debug.LogError("========================================");
+                Debug.LogError("[MQTT Device] ❌ CONNECTION FAILED!");
+                Debug.LogError($"[MQTT Device] Error: {request.error}");
+                Debug.LogError($"[MQTT Device] Result: {request.result}");
+                Debug.LogError($"[MQTT Device] Response Code: {request.responseCode}");
+                Debug.LogError($"[MQTT Device] URL: {testUrl}");
+                Debug.LogError("========================================");
+                Debug.LogError("[MQTT Device] 💡 TROUBLESHOOTING:");
+                Debug.LogError($"  1. Is backend running at {baseUrl}?");
+                Debug.LogError($"  2. Can you access {baseUrl} from browser?");
+                Debug.LogError($"  3. Check firewall settings");
+                Debug.LogError($"  4. Verify serverAddress and serverPort in Inspector");
+                Debug.LogError("========================================");
+            }
+        }
     }
 
     /// <summary>
@@ -241,21 +307,28 @@ public class MqttDeviceManagerWebSocket : MonoBehaviour
         string jsonBody = JsonConvert.SerializeObject(requestBody);
         byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonBody);
 
+        Debug.Log($"[MQTT Device] 📤 Publishing to: {topic}");
+        Debug.Log($"[MQTT Device] 📤 Payload: {payload.Substring(0, Math.Min(200, payload.Length))}");
+
         using (var request = new UnityEngine.Networking.UnityWebRequest(url, "POST"))
         {
             request.uploadHandler = new UnityEngine.Networking.UploadHandlerRaw(bodyRaw);
             request.downloadHandler = new UnityEngine.Networking.DownloadHandlerBuffer();
             request.SetRequestHeader("Content-Type", "application/json");
+            request.timeout = 10;
 
             yield return request.SendWebRequest();
 
             if (request.result == UnityEngine.Networking.UnityWebRequest.Result.Success)
             {
-                Debug.Log($"[MQTT Device] 📤 Published to {topic}");
+                Debug.Log($"[MQTT Device] ✅ Published to {topic} - Response: {request.downloadHandler.text}");
             }
             else
             {
-                Debug.LogWarning($"[MQTT Device] Publish failed: {request.error}");
+                Debug.LogError($"[MQTT Device] ❌ Publish FAILED to {topic}");
+                Debug.LogError($"[MQTT Device] Error: {request.error}");
+                Debug.LogError($"[MQTT Device] Response Code: {request.responseCode}");
+                Debug.LogError($"[MQTT Device] Response: {request.downloadHandler.text}");
             }
         }
     }

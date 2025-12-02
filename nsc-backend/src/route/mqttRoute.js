@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const mqttService = require('../service/MqttService');
 
 // In-memory command queue for devices (simple polling mechanism)
 const deviceCommands = new Map();
@@ -16,11 +17,21 @@ router.post('/publish', async (req, res) => {
             return res.status(400).json({ error: 'Topic is required' });
         }
 
-        // Get MQTT client from app
-        const mqttClient = req.app.get('mqttClient');
+        // Use mqttService directly instead of app.get
+        const mqttClient = mqttService.client;
 
         if (!mqttClient || !mqttClient.connected) {
-            return res.status(503).json({ error: 'MQTT broker not connected' });
+            console.warn('[MQTT Route] MQTT not connected, attempting to use service...');
+
+            // Try using mqttService.publish instead
+            try {
+                mqttService.publish(topic, payload || '', { retain: retain || false });
+                console.log(`[MQTT Route] Published via service to ${topic}`);
+                return res.json({ success: true, topic });
+            } catch (pubErr) {
+                console.error('[MQTT Route] Service publish error:', pubErr);
+                return res.status(503).json({ error: 'MQTT broker not connected' });
+            }
         }
 
         // Publish to MQTT
