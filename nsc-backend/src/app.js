@@ -72,10 +72,11 @@ app.use(errorConverter);
 app.use(errorHandler);
 const db = require('./models');
 
-// Uncomment this line if you want to sync database model
+// Sync database model - alter: true will update column sizes automatically
 db.sequelize
-  .sync()
+  .sync({ alter: true })
   .then(async () => {
+    console.log('Database synced successfully');
     // ensure there is at least one admin user
     const userService = new UserService();
     await userService.ensureAdminExists();

@@ -976,18 +976,21 @@ class SessionService {
     try { global.io?.emit('mqtt_message', { topic, payload }); } catch { }
 
     // Mirror to both device topics for compatibility
-    const vrHw = participant.vr?.deviceId || null;
-    const chairHw = participant.chair?.deviceId || null;
+    // Use participant.vr_device_id directly (the stored device ID) OR fall back to associated model
+    const vrHw = participant.vr_device_id || participant.vr?.deviceId || null;
+    const chairHw = participant.chair_device_id || participant.chair?.deviceId || null;
     const logger = require('../config/logger');
     logger.info(`[commandParticipant] ${cmd} for participant ${participantId} (VR: ${vrHw}, Chair: ${chairHw}) ${cmd === 'select_journey' ? `journey: ${journeyId}` : ''}`);
     try {
       if (vrHw) {
         mqttService.publish(`devices/${vrHw}/commands/${cmd}`, { ...payload, sessionId }, { qos: 1, retain: false });
         try { global.io?.emit('mqtt_message', { topic: `devices/${vrHw}/commands/${cmd}`, payload: { ...payload, sessionId } }); } catch { }
+        logger.info(`[commandParticipant] Published to devices/${vrHw}/commands/${cmd}`);
       }
       if (chairHw) {
         mqttService.publish(`devices/${chairHw}/commands/${cmd}`, { ...payload, sessionId }, { qos: 1, retain: false });
         try { global.io?.emit('mqtt_message', { topic: `devices/${chairHw}/commands/${cmd}`, payload: { ...payload, sessionId } }); } catch { }
+        logger.info(`[commandParticipant] Published to devices/${chairHw}/commands/${cmd}`);
       }
     } catch { /* noop */ }
 
