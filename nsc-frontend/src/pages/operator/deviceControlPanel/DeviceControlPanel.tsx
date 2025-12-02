@@ -539,6 +539,7 @@ export default function DeviceControlPanel() {
           renderDevices((map: Map<string, Device>) => {
             const cur: Device = map.get(id) || {
               id,
+              deviceId: id,
               type: (d.type as DeviceType) || "unknown",
               name: d.display_name || d.name || id,
               online: false,
@@ -567,7 +568,7 @@ export default function DeviceControlPanel() {
             display_name?: string;
           };
           renderDevices((map: Map<string, Device>) => {
-            const cur: Device = map.get(id) || { id, type: "unknown", name: data?.display_name || id, online: false };
+            const cur: Device = map.get(id) || { id, deviceId: id, type: "unknown", name: data?.display_name || id, online: false };
             const rawStatus = String((data && data.status) || "").toLowerCase();
             // Normalize status variants
             const status =
@@ -612,7 +613,7 @@ export default function DeviceControlPanel() {
           const id = t.split("/")[1];
           const heartbeatData = JSON.parse(p || "{}") as { type?: string; deviceId?: string };
           renderDevices((map: Map<string, Device>) => {
-            const cur: Device = map.get(id) || { id, type: "unknown", name: id, online: false };
+            const cur: Device = map.get(id) || { id, deviceId: id, type: "unknown", name: id, online: false };
             
             // Update device type from heartbeat payload if provided
             const reportedType = String(heartbeatData?.type || "").toLowerCase();
@@ -649,7 +650,7 @@ export default function DeviceControlPanel() {
           };
           const event = String(data?.event || "").toLowerCase();
           renderDevices((map: Map<string, Device>) => {
-            const cur: Device = map.get(id) || { id, type: "unknown", name: data?.display_name || id, online: false };
+            const cur: Device = map.get(id) || { id, deviceId: id, type: "unknown", name: data?.display_name || id, online: false };
             
             // Update device type from event payload if available; otherwise infer from id
             const reportedType = String((data && data.type) || "").toLowerCase();
