@@ -5,6 +5,52 @@ const mqttService = require('../service/MqttService');
 // In-memory command queue for devices (simple polling mechanism)
 const deviceCommands = new Map();
 
+// Subscribe to device commands and queue them for HTTP polling
+// This bridges MQTT commands from operator panel to Unity's HTTP polling
+function setupCommandBridge() {
+    // Wait for MQTT to be connected
+    const checkAndSubscribe = () => {
+        if (mqttService.client && mqttService.client.connected) {
+            // Subscribe to all device commands
+            mqttService.subscribe('devices/+/commands/+', (topic, message) => {
+                try {
+                    // Parse topic: devices/{deviceId}/commands/{command}
+                    const parts = topic.split('/');
+                    const deviceId = parts[1];
+                    const command = parts[3];
+                    const payload = message.toString();
+
+                    console.log(`[MQTT Route] Received command ${command} for device ${deviceId}`);
+
+                    // Queue command for HTTP polling
+                    if (!deviceCommands.has(deviceId)) {
+                        deviceCommands.set(deviceId, []);
+                    }
+
+                    deviceCommands.get(deviceId).push({
+                        command,
+                        payload
+                    });
+
+                    console.log(`[MQTT Route] Queued command ${command} for device ${deviceId} (queue size: ${deviceCommands.get(deviceId).length})`);
+                } catch (err) {
+                    console.error('[MQTT Route] Error processing command:', err);
+                }
+            });
+            console.log('[MQTT Route] Command bridge initialized - listening for device commands');
+        } else {
+            // Retry after 1 second
+            setTimeout(checkAndSubscribe, 1000);
+        }
+    };
+    
+    // Start checking
+    setTimeout(checkAndSubscribe, 2000);
+}
+
+// Initialize command bridge
+setupCommandBridge();
+
 /**
  * POST /api/mqtt/publish
  * Publish a message to MQTT from Unity devices
