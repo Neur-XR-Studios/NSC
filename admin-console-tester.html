@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Console Tester - Socket.IO & MQTT Logger</title>
+    <script src="https://cdn.socket.io/4.4.1/socket.io.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            padding: 20px;
+            overflow: hidden;
+        }
+
+        .container {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            padding: 16px 24px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+
+        .header .subtitle {
+            color: #6b7280;
+            font-size: 13px;
+        }
+
+        .main-grid {
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            gap: 16px;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: #1f2937;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card-title::before {
+            content: "";
+            width: 4px;
+            height: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 2px;
+        }
+
+        .form-group {
+            margin-bottom: 12px;
+        }
+
+        label {
+            font-size: 12px;
+            font-weight: 500;
+            color: #374151;
+            display: block;
+            margin-bottom: 6px;
+        }
+
+        input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+        }
+
+        button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            color: white;
+            margin-top: 8px;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: #f3f4f6;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 500;
+            color: #374151;
+            margin-top: 12px;
+        }
+
+        .status-badge.connected {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .status-badge.connected::before {
+            content: "";
+            width: 8px;
+            height: 8px;
+            background: #10b981;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .status-badge.disconnected::before {
+            content: "";
+            width: 8px;
+            height: 8px;
+            background: #6b7280;
+            border-radius: 50%;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .log-container {
+            flex: 1;
+            overflow: auto;
+            background: #1f2937;
+            color: #e5e7eb;
+            font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+            font-size: 11px;
+            padding: 12px;
+            border-radius: 8px;
+            line-height: 1.6;
+            box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .log-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .log-container::-webkit-scrollbar-track {
+            background: #374151;
+            border-radius: 4px;
+        }
+
+        .log-container::-webkit-scrollbar-thumb {
+            background: #6b7280;
+            border-radius: 4px;
+        }
+
+        .log-entry {
+            margin-bottom: 8px;
+            padding: 8px;
+            border-left: 3px solid transparent;
+            border-radius: 4px;
+            background: rgba(0, 0, 0, 0.2);
+        }
+
+        .log-entry.socket-io {
+            border-left-color: #3b82f6;
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .log-entry.mqtt {
+            border-left-color: #10b981;
+            background: rgba(16, 185, 129, 0.1);
+        }
+
+        .log-entry.system {
+            border-left-color: #f59e0b;
+            background: rgba(245, 158, 11, 0.1);
+        }
+
+        .log-entry.error {
+            border-left-color: #ef4444;
+            background: rgba(239, 68, 68, 0.1);
+        }
+
+        .log-timestamp {
+            color: #9ca3af;
+            font-size: 10px;
+            margin-right: 8px;
+        }
+
+        .log-category {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 9px;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-right: 8px;
+        }
+
+        .log-category.socket-io {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .log-category.mqtt {
+            background: #10b981;
+            color: white;
+        }
+
+        .log-category.system {
+            background: #f59e0b;
+            color: white;
+        }
+
+        .log-category.error {
+            background: #ef4444;
+            color: white;
+        }
+
+        .log-message {
+            color: #e5e7eb;
+        }
+
+        .log-details {
+            margin-top: 4px;
+            padding: 8px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 4px;
+            font-size: 10px;
+            color: #9ca3af;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .controls {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .controls button {
+            flex: 1;
+        }
+
+        .divider {
+            height: 1px;
+            background: #e5e7eb;
+            margin: 16px 0;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🔍 Admin Console Tester</h1>
+            <span class="subtitle">Socket.IO & MQTT Event Logger - Real-time monitoring like React Admin Panel</span>
+        </div>
+
+        <!-- Main Grid -->
+        <div class="main-grid">
+            <!-- Left Panel: Connection -->
+            <div class="card">
+                <h2 class="card-title">Connection</h2>
+                <div class="form-group">
+                    <label>Backend URL</label>
+                    <input id="backendUrl" value="http://localhost:8001" />
+                </div>
+                <button id="btnConnect" class="btn-primary">⚡ Connect</button>
+                <button id="btnDisconnect" class="btn-danger" disabled>⏹ Disconnect</button>
+                <div id="connStatus" class="status-badge disconnected">Disconnected</div>
+
+                <div class="divider"></div>
+
+                <h3 class="card-title" style="font-size: 14px;">Filters</h3>
+                <div class="controls">
+                    <button onclick="filterLogs('all')" style="font-size: 11px; padding: 6px 10px;">All</button>
+                    <button onclick="filterLogs('socket.io')"
+                        style="font-size: 11px; padding: 6px 10px;">Socket.IO</button>
+                    <button onclick="filterLogs('mqtt')" style="font-size: 11px; padding: 6px 10px;">MQTT</button>
+                </div>
+                <button onclick="clearLogs()" class="btn-danger" style="margin-top: 12px; font-size: 11px;">🗑️ Clear
+                    Logs</button>
+            </div>
+
+            <!-- Right Panel: Logs -->
+            <div class="card">
+                <h2 class="card-title">Console Logs</h2>
+                <div id="logContainer" class="log-container"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let bridge = null;
+        let connected = false;
+        let allLogs = [];
+        let currentFilter = 'all';
+
+        function log(category, message, details = null) {
+            const ts = new Date().toLocaleTimeString();
+            const entry = { category, message, details, timestamp: ts };
+            allLogs.push(entry);
+
+            // Keep only last 500 logs
+            if (allLogs.length > 500) {
+                allLogs.shift();
+            }
+
+            renderLogs();
+        }
+
+        function renderLogs() {
+            const container = document.getElementById('logContainer');
+            const filtered = currentFilter === 'all'
+                ? allLogs
+                : allLogs.filter(l => l.category === currentFilter);
+
+            container.innerHTML = filtered.map(entry => {
+                const detailsHtml = entry.details
+                    ? `<div class="log-details">${typeof entry.details === 'string' ? entry.details : JSON.stringify(entry.details, null, 2)}</div>`
+                    : '';
+
+                return `
+                    <div class="log-entry ${entry.category}">
+                        <span class="log-timestamp">${entry.timestamp}</span>
+                        <span class="log-category ${entry.category}">${entry.category}</span>
+                        <span class="log-message">${entry.message}</span>
+                        ${detailsHtml}
+                    </div>
+                `;
+            }).join('');
+
+            // Auto-scroll to bottom
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function filterLogs(category) {
+            currentFilter = category;
+            renderLogs();
+        }
+
+        function clearLogs() {
+            allLogs = [];
+            renderLogs();
+        }
+
+        function setConnStatus(text, isConnected) {
+            const el = document.getElementById('connStatus');
+            el.textContent = text;
+            el.className = isConnected ? 'status-badge connected' : 'status-badge disconnected';
+        }
+
+        function toggleButtons(isConnected) {
+            document.getElementById('btnConnect').disabled = isConnected;
+            document.getElementById('btnDisconnect').disabled = !isConnected;
+        }
+
+        document.getElementById('btnConnect').addEventListener('click', () => {
+            if (connected) return;
+
+            const url = document.getElementById('backendUrl').value.trim();
+            log('system', `Connecting to ${url}...`);
+
+            try {
+                bridge = io(url, { transports: ['websocket'] });
+
+                bridge.on('connect', () => {
+                    connected = true;
+                    setConnStatus('Connected', true);
+                    toggleButtons(true);
+                    log('socket.io', '✅ Socket.IO connected', { url });
+
+                    // Subscribe to device topics
+                    bridge.emit('mqtt_subscribe', { topic: 'devices/discovery/announce', options: { qos: 1 } });
+                    bridge.emit('mqtt_subscribe', { topic: 'devices/+/status', options: { qos: 1 } });
+                    bridge.emit('mqtt_subscribe', { topic: 'devices/+/heartbeat', options: { qos: 1 } });
+                    bridge.emit('mqtt_subscribe', { topic: 'devices/+/events', options: { qos: 1 } });
+                    bridge.emit('mqtt_subscribe', { topic: 'devices/+/commands/+', options: { qos: 1 } });
+                    bridge.emit('mqtt_subscribe', { topic: 'sessions/+/commands/+', options: { qos: 1 } });
+
+                    log('mqtt', '📥 Subscribed to device topics');
+
+                    // Request device snapshot
+                    bridge.emit('devices:get');
+                    log('socket.io', '📤 Requested devices:get');
+                });
+
+                bridge.on('disconnect', () => {
+                    connected = false;
+                    setConnStatus('Disconnected', false);
+                    toggleButtons(false);
+                    log('socket.io', '❌ Socket.IO disconnected');
+                });
+
+                // Socket.IO Events
+                bridge.on('devices:snapshot', (payload) => {
+                    log('socket.io', '📨 devices:snapshot received', payload);
+                });
+
+                bridge.on('device:discovered', (payload) => {
+                    log('socket.io', '📨 device:discovered', payload);
+                });
+
+                bridge.on('device:heartbeat', (payload) => {
+                    log('socket.io', '💓 device:heartbeat', payload);
+                });
+
+                bridge.on('device:status', (payload) => {
+                    log('socket.io', '📊 device:status', payload);
+                });
+
+                bridge.on('device:offline', (payload) => {
+                    log('socket.io', '🔴 device:offline', payload);
+                });
+
+                // MQTT Messages (forwarded via Socket.IO)
+                bridge.on('mqtt_message', ({ topic, payload }) => {
+                    const parsedPayload = typeof payload === 'string' ? payload : JSON.stringify(payload);
+                    log('mqtt', `📬 ${topic}`, parsedPayload);
+                });
+
+                bridge.on('error', (error) => {
+                    log('error', '❌ Socket.IO error', error);
+                });
+
+            } catch (error) {
+                log('error', '❌ Connection failed', error.message);
+            }
+        });
+
+        document.getElementById('btnDisconnect').addEventListener('click', () => {
+            if (bridge) {
+                bridge.disconnect();
+                bridge = null;
+            }
+        });
+
+        // Initial render
+        renderLogs();
+    </script>
+</body>
+
+</html>

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
@@ -6,6 +6,7 @@ import { getDevicePairs, getOnlineDevicePairs, deleteDevicePair, type DevicePair
 import { Plus, Trash2, Wifi, WifiOff, Monitor, Armchair, RefreshCw, PlugZap } from "lucide-react";
 import { CreatePairingCodeModal } from "@/components/modals/CreatePairingCodeModal";
 import { customCss } from "@/lib/customCss";
+import { realtime } from "@/lib/realtime";
 
 export default function DevicePairManagement() {
   const { toast } = useToast();
@@ -14,6 +15,100 @@ export default function DevicePairManagement() {
   const [showOnlineOnly, setShowOnlineOnly] = useState(false);
   const [bundleModalOpen, setBundleModalOpen] = useState(false);
   const [bundleTargetPairId, setBundleTargetPairId] = useState<string | null>(null);
+  
+  // Real-time online status tracking via MQTT
+  const [onlineDeviceIds, setOnlineDeviceIds] = useState<Set<string>>(new Set());
+  
+  // MQTT message handler for real-time online status
+  const handleMqttMessage = useCallback((msg: { destinationName: string; payloadString?: string }) => {
+    const topic = msg.destinationName;
+    const payload = msg.payloadString || "";
+    
+    try {
+      // Handle device status updates
+      if (topic.match(/^devices\/[^/]+\/status$/)) {
+        const deviceId = topic.split("/")[1];
+        const data = JSON.parse(payload);
+        const isOnline = data.status !== "offline" && data.status !== "disconnected";
+        
+        setOnlineDeviceIds(prev => {
+          const next = new Set(prev);
+          if (isOnline) {
+            next.add(deviceId);
+          } else {
+            next.delete(deviceId);
+          }
+          return next;
+        });
+      }
+      
+      // Handle heartbeats - device is online if sending heartbeats
+      if (topic.match(/^devices\/[^/]+\/heartbeat$/)) {
+        const deviceId = topic.split("/")[1];
+        setOnlineDeviceIds(prev => {
+          const next = new Set(prev);
+          next.add(deviceId);
+          return next;
+        });
+      }
+      
+      // Handle LWT (Last Will Testament) - device went offline
+      if (topic.match(/^devices\/[^/]+\/lwt$/)) {
+        const deviceId = topic.split("/")[1];
+        if (payload.toLowerCase() === "offline") {
+          setOnlineDeviceIds(prev => {
+            const next = new Set(prev);
+            next.delete(deviceId);
+            return next;
+          });
+        }
+      }
+      
+      // Handle device snapshot
+      if (topic === "admin/devices/snapshot") {
+        const devices = JSON.parse(payload) as Array<{ deviceId: string; online?: boolean }>;
+        setOnlineDeviceIds(prev => {
+          const next = new Set(prev);
+          devices.forEach(d => {
+            if (d.online === true) {
+              next.add(d.deviceId);
+            }
+          });
+          return next;
+        });
+      }
+    } catch (e) {
+      // Ignore parse errors
+    }
+  }, []);
+  
+  // Connect to MQTT for real-time updates
+  useEffect(() => {
+    const connectMqtt = async () => {
+      try {
+        const wsHost = window.location.hostname || "localhost";
+        await realtime.connect({ url: `ws://${wsHost}:9001`, clientId: `admin-devices-${Date.now()}` });
+        
+        // Subscribe to device topics
+        realtime.subscribe("devices/+/status", 1);
+        realtime.subscribe("devices/+/heartbeat", 1);
+        realtime.subscribe("devices/+/lwt", 1);
+        realtime.subscribe("admin/devices/snapshot", 1);
+        
+        // Request snapshot
+        realtime.publish("admin/devices/snapshot/request", "{}", false);
+      } catch (e) {
+        console.error("[DevicePairManagement] MQTT connect error:", e);
+      }
+    };
+    
+    realtime.onMessage(handleMqttMessage);
+    void connectMqtt();
+    
+    return () => {
+      // Cleanup handled by realtime singleton
+    };
+  }, [handleMqttMessage]);
 
   const loadPairs = async () => {
     setLoading(true);
@@ -81,7 +176,13 @@ export default function DevicePairManagement() {
     setBundleModalOpen(true);
   };
 
-  const isDeviceOnline = (lastSeenAt?: string) => {
+  // Check if device is online - prefer real-time MQTT status, fallback to lastSeenAt
+  const isDeviceOnline = (deviceId?: string, lastSeenAt?: string) => {
+    // First check real-time MQTT status
+    if (deviceId && onlineDeviceIds.has(deviceId)) {
+      return true;
+    }
+    // Fallback to lastSeenAt from database
     if (!lastSeenAt) return false;
     const threshold = 30 * 1000; // 30 seconds
     return Date.now() - new Date(lastSeenAt).getTime() < threshold;
@@ -128,8 +229,8 @@ export default function DevicePairManagement() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {pairs.map((pair) => {
-            const vrOnline = isDeviceOnline(pair.vr?.lastSeenAt);
-            const chairOnline = isDeviceOnline(pair.chair?.lastSeenAt);
+            const vrOnline = isDeviceOnline(pair.vr?.deviceId || pair.vr_device_id, pair.vr?.lastSeenAt);
+            const chairOnline = isDeviceOnline(pair.chair?.deviceId || pair.chair_device_id, pair.chair?.lastSeenAt);
             const bothOnline = vrOnline && chairOnline;
 
             return (

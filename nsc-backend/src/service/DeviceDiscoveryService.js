@@ -20,7 +20,25 @@ class DeviceDiscoveryService {
     // Listen for device status updates
     mqttService.subscribe('devices/+/status', this.handleStatusUpdate.bind(this));
 
+    // Listen for Last Will Testament (offline detection)
+    mqttService.subscribe('devices/+/lwt', this.handleLastWill.bind(this));
+
+    // Listen for admin snapshot requests
+    mqttService.subscribe('admin/devices/request_snapshot', this.handleSnapshotRequest.bind(this));
+
     logger.info('[DeviceDiscovery] MQTT handlers setup complete');
+  }
+
+  /**
+   * Handle admin request for device snapshot
+   */
+  handleSnapshotRequest(topic, payload) {
+    try {
+      logger.info('[DeviceDiscovery] Snapshot requested by admin');
+      this.publishDeviceSnapshot();
+    } catch (error) {
+      logger.error('[DeviceDiscovery] Error handling snapshot request', { error: error.message });
+    }
   }
 
   /**
@@ -65,15 +83,8 @@ class DeviceDiscoveryService {
       // Setup heartbeat monitoring
       this.setupHeartbeatMonitoring(deviceId);
 
-      // Emit to connected clients via Socket.IO
-      global.io?.emit('device:discovered', {
-        deviceId,
-        type,
-        name,
-        metadata,
-        isRegistered: this.discoveredDevices.get(deviceId).isRegistered,
-        lastSeen: new Date()
-      });
+      // Publish device snapshot for admin clients
+      this.publishDeviceSnapshot();
 
     } catch (error) {
       logger.error('[DeviceDiscovery] Error handling announcement', { error: error.message });
@@ -103,39 +114,29 @@ class DeviceDiscoveryService {
         this.discoveredDevices.set(deviceId, device);
         // Start heartbeat monitoring for new device
         this.setupHeartbeatMonitoring(deviceId);
-        // Notify clients a device has been discovered even if type is unknown
-        global.io?.emit('device:discovered', {
-          deviceId,
-          type: device.type,
-          name: device.name,
-          metadata: device.metadata,
-          isRegistered: device.isRegistered,
-          lastSeen: device.lastSeen,
-          online: true,
-        });
+        // Publish snapshot for admin clients
+        this.publishDeviceSnapshot();
       } else {
         device.lastSeen = new Date();
         device.online = true;
       }
 
-      // Update database for registered devices
-      if (device.isRegistered && (device.type === 'vr' || device.type === 'chair')) {
+      // Update database for all devices (not just registered ones)
+      // This ensures lastSeenAt is always current for online status tracking
+      if (device.type === 'vr' || device.type === 'chair') {
         const Model = device.type === 'vr' ? VRDevice : ChairDevice;
-        await Model.update(
-          { lastSeenAt: new Date() },
-          { where: { deviceId } }
-        );
+        try {
+          await Model.update(
+            { lastSeenAt: new Date() },
+            { where: { deviceId } }
+          );
+        } catch (dbErr) {
+          // Device might not exist in DB yet, that's OK
+        }
       }
 
       // Reset heartbeat timer
       this.setupHeartbeatMonitoring(deviceId);
-
-      // Emit heartbeat to clients
-      global.io?.emit('device:heartbeat', {
-        deviceId,
-        timestamp: new Date(),
-        data
-      });
     } catch (error) {
       logger.error('[DeviceDiscovery] Error handling heartbeat', { error: error.message });
     }
@@ -175,24 +176,8 @@ class DeviceDiscoveryService {
       // Refresh heartbeat timeout on any status update
       this.setupHeartbeatMonitoring(deviceId);
 
-      // If new, emit discovered, else emit status update
-      if (isNew) {
-        global.io?.emit('device:discovered', {
-          deviceId,
-          type: device.type,
-          name: device.name,
-          metadata: device.metadata,
-          isRegistered: device.isRegistered,
-          lastSeen: device.lastSeen,
-          online: true,
-        });
-      }
-
-      global.io?.emit('device:status', {
-        deviceId,
-        status: statusData,
-        timestamp: new Date()
-      });
+      // Publish snapshot for admin clients
+      this.publishDeviceSnapshot();
     } catch (error) {
       logger.error('[DeviceDiscovery] Error handling status update', { error: error.message });
     }
@@ -223,15 +208,11 @@ class DeviceDiscoveryService {
     if (device) {
       logger.warn('[DeviceDiscovery] Device timeout', { deviceId, type: device.type });
 
-      // Emit device offline event
-      global.io?.emit('device:offline', {
-        deviceId,
-        type: device.type,
-        lastSeen: device.lastSeen
-      });
-
       // Mark as offline but keep in memory so it doesn't disappear from admin
       device.online = false;
+
+      // Publish snapshot to notify admin clients
+      this.publishDeviceSnapshot();
     }
 
     // Clean up timer
@@ -297,6 +278,61 @@ class DeviceDiscoveryService {
     this.discoveredDevices.clear();
 
     logger.info('[DeviceDiscovery] Cleanup completed');
+  }
+
+  /**
+   * Handle Last Will Testament (device offline)
+   */
+  async handleLastWill(topic, payload) {
+    try {
+      const deviceId = topic.split('/')[1];
+      const data = JSON.parse(payload.toString());
+
+      logger.info('[DeviceDiscovery] Last Will received', { deviceId });
+
+      const device = this.discoveredDevices.get(deviceId);
+      if (device) {
+        device.online = false;
+        device.lastSeen = new Date();
+
+        // Clear heartbeat timer
+        if (this.heartbeatTimers.has(deviceId)) {
+          clearTimeout(this.heartbeatTimers.get(deviceId));
+          this.heartbeatTimers.delete(deviceId);
+        }
+
+        // Publish snapshot to notify admin clients
+        this.publishDeviceSnapshot();
+      }
+    } catch (error) {
+      logger.error('[DeviceDiscovery] Error handling Last Will', { error: error.message });
+    }
+  }
+
+  /**
+   * Publish device snapshot as retained message for admin clients
+   */
+  publishDeviceSnapshot() {
+    try {
+      const devices = Array.from(this.discoveredDevices.values()).map(d => ({
+        deviceId: d.deviceId,
+        type: d.type,
+        name: d.name,
+        metadata: d.metadata,
+        online: d.online,
+        lastSeen: d.lastSeen,
+        isRegistered: d.isRegistered
+      }));
+
+      // Publish as retained message so new admin clients get it immediately
+      mqttService.publish(
+        'admin/devices/snapshot',
+        JSON.stringify(devices),
+        { qos: 1, retain: true }
+      );
+    } catch (error) {
+      logger.error('[DeviceDiscovery] Error publishing snapshot', { error: error.message });
+    }
   }
 }
 

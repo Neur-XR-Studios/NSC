@@ -50,8 +50,8 @@ class AnalyticsService {
         // Sessions by type (individual vs group)
         const sessionsByType = await Session.findAll({
             where: dateFilter,
-            attributes: ['type', [sequelize.fn('COUNT', sequelize.col('id')), 'count']],
-            group: ['type'],
+            attributes: ['session_type', [sequelize.fn('COUNT', sequelize.col('id')), 'count']],
+            group: ['session_type'],
             raw: true,
         });
 
@@ -89,16 +89,17 @@ class AnalyticsService {
             where: dateFilter,
             attributes: [
                 'id',
-                'type',
-                [sequelize.fn('COUNT', sequelize.col('SessionParticipants.id')), 'participant_count'],
+                'session_type',
+                [sequelize.fn('COUNT', sequelize.col('participants.id')), 'participant_count'],
             ],
             include: [
                 {
                     model: SessionParticipant,
+                    as: 'participants', // Must use alias defined in Session.associate
                     attributes: [],
                 },
             ],
-            group: ['Session.id', 'Session.type'],
+            group: ['Session.id', 'Session.session_type'],
             raw: true,
         });
 
@@ -106,7 +107,7 @@ class AnalyticsService {
         let filledSeats = 0;
 
         sessions.forEach((session) => {
-            const capacity = session.type === 'individual' ? 1 : 4; // Assuming group max = 4
+            const capacity = session.session_type === 'individual' ? 1 : 4; // Assuming group max = 4
             totalSeats += capacity;
             filledSeats += parseInt(session.participant_count) || 0;
         });

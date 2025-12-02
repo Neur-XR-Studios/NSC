@@ -106,13 +106,16 @@ export default function IndividualSessionController({
     selectedJourneyByPairRef.current = selectedJourneyByPair;
   }, [selectedJourneyByPair]);
 
-  // Filter out already paired devices
+  // Filter out already paired devices AND only show ONLINE devices
   const pairedVrIds = useMemo(() => new Set(sessionPairs.map((p) => p.vrId)), [sessionPairs]);
   const pairedChairIds = useMemo(() => new Set(sessionPairs.map((p) => p.chairId)), [sessionPairs]);
-  const availableVrDevices = useMemo(() => vrDevices.filter((d) => !pairedVrIds.has(d.id)), [vrDevices, pairedVrIds]);
+  const availableVrDevices = useMemo(() => 
+    vrDevices.filter((d) => !pairedVrIds.has(d.id) && (d.online === true || !!onlineById[d.id])), 
+    [vrDevices, pairedVrIds, onlineById]
+  );
   const availableChairDevices = useMemo(
-    () => chairDevices.filter((d) => !pairedChairIds.has(d.id)),
-    [chairDevices, pairedChairIds],
+    () => chairDevices.filter((d) => !pairedChairIds.has(d.id) && (d.online === true || !!onlineById[d.id])),
+    [chairDevices, pairedChairIds, onlineById],
   );
 
   const didInitRef = useRef(false);
@@ -982,6 +985,7 @@ export default function IndividualSessionController({
                     <div className="space-y-2 max-h-48 overflow-y-auto">
                       {availableVrDevices.map((d) => {
                         const selected = selectedVrId === d.id;
+                        const isOnline = d.online === true || !!onlineById[d.id];
                         return (
                           <button
                             key={d.id}
@@ -999,8 +1003,8 @@ export default function IndividualSessionController({
                                 <div className="text-xs text-slate-500">{d.id}</div>
                               </div>
                               <div className="flex items-center gap-1">
-                                <div className="w-2 h-2 rounded-full bg-green-500" />
-                                <span className="text-xs text-slate-400">Online</span>
+                                <div className={`w-2 h-2 rounded-full ${isOnline ? "bg-green-500" : "bg-slate-600"}`} />
+                                <span className="text-xs text-slate-400">{isOnline ? "Online" : "Offline"}</span>
                               </div>
                             </div>
                           </button>
@@ -1027,6 +1031,7 @@ export default function IndividualSessionController({
                     <div className="space-y-2 max-h-48 overflow-y-auto">
                       {availableChairDevices.map((d) => {
                         const selected = selectedChairId === d.id;
+                        const isOnline = d.online === true || !!onlineById[d.id];
                         return (
                           <button
                             key={d.id}
@@ -1044,8 +1049,8 @@ export default function IndividualSessionController({
                                 <div className="text-xs text-slate-500">{d.id}</div>
                               </div>
                               <div className="flex items-center gap-1">
-                                <div className="w-2 h-2 rounded-full bg-green-500" />
-                                <span className="text-xs text-slate-400">Online</span>
+                                <div className={`w-2 h-2 rounded-full ${isOnline ? "bg-green-500" : "bg-slate-600"}`} />
+                                <span className="text-xs text-slate-400">{isOnline ? "Online" : "Offline"}</span>
                               </div>
                             </div>
                           </button>

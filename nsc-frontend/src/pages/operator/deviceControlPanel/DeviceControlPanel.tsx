@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { realtime } from "@/lib/realtime";
+import { mqttRealtime as realtime } from "@/lib/mqtt-realtime";
 import api from "@/lib/axios";
 import type { JourneyItem } from "@/types/journey";
 import {
@@ -76,7 +76,13 @@ export default function DeviceControlPanel() {
     (typeof window !== "undefined"
       ? `${window.location.protocol}//${window.location.hostname}:8001`
       : "http://localhost:8001");
-  const mqttWsUrl = (import.meta.env.VITE_MQTT_WS_URL as string) || "ws://localhost:9001";
+  const envUrl = import.meta.env.VITE_MQTT_WS_URL as string;
+  const mqttWsUrl =
+    (envUrl && !envUrl.includes("localhost"))
+      ? envUrl
+      : (typeof window !== "undefined"
+        ? `ws://${window.location.hostname}:9001`
+        : "ws://localhost:9001");
   const [forceBridge] = useState<boolean>(true);
   const [mqttUrl] = useState<string>(forceBridge ? backendUrl : mqttWsUrl);
   const [clientId] = useState<string>(`admin-${Math.random().toString(36).slice(2, 8).toUpperCase()}`);
@@ -96,11 +102,24 @@ export default function DeviceControlPanel() {
 
   // Devices & pairs
   const [devicesMap, setDevicesMap] = useState<Map<string, Device>>(new Map());
-  const devicesList = useMemo(() => Array.from(devicesMap.values()), [devicesMap]);
+  const devicesList = useMemo(() => {
+    const list = Array.from(devicesMap.values());
+    // Log online devices for debugging
+    const onlineDevices = list.filter(d => d.online);
+    const vrOnline = onlineDevices.filter(d => d.type === 'vr').map(d => d.id);
+    const chairOnline = onlineDevices.filter(d => d.type === 'chair').map(d => d.id);
+    console.log(`[Devices] VR online: [${vrOnline.join(', ')}], Chair online: [${chairOnline.join(', ')}]`);
+    return list;
+  }, [devicesMap]);
 
   const [pairs, setPairs] = useState<Pair[]>([]);
-  const vrDevices = useMemo(() => devicesList.filter((d) => d.type === "vr" && d.online), [devicesList]);
-  const chairDevices = useMemo(() => devicesList.filter((d) => d.type === "chair" && d.online), [devicesList]);
+  // Return ALL devices of each type - DeviceSelectionStep will check online status
+  const vrDevices = useMemo(() => {
+    return devicesList.filter((d) => d.type === "vr");
+  }, [devicesList]);
+  const chairDevices = useMemo(() => {
+    return devicesList.filter((d) => d.type === "chair");
+  }, [devicesList]);
   const pairedVrIds = useMemo(() => new Set(pairs.map((p) => p.vrId)), [pairs]);
   const pairedChairIds = useMemo(() => new Set(pairs.map((p) => p.chairId)), [pairs]);
   const [selectedVrId, setSelectedVrId] = useState<string>("");
@@ -352,7 +371,7 @@ export default function DeviceControlPanel() {
     (topic: string) => {
       if (!connected) return;
       realtime.subscribe(topic, 1);
-      log(`${realtime.currentMode === "bridge" ? "Sub (bridge)" : "Sub"} ${topic}`);
+      log(`Subscribed to ${topic}`);
     },
     [connected, log],
   );
@@ -360,11 +379,6 @@ export default function DeviceControlPanel() {
   const publishTopic = useCallback(
     (topic: string, payload: string, retain = false) => {
       if (!connected) return;
-      // Console label for outbound admin-originated publishes
-      // try { console.log(`[ADMIN→DEVICE ${realtime.currentMode}]`, topic, payload); } catch (e) {
-      //   const message = e instanceof Error ? e.message : String(e);
-      //   log(`Failed to publish topic: ${message}`);
-      // }
       realtime.publish(topic, payload, retain, 1);
 
       // Extract device ID if present
@@ -377,7 +391,7 @@ export default function DeviceControlPanel() {
       let details: any = payload;
       try {
         details = JSON.parse(payload);
-      } catch (e) {}
+      } catch (e) { }
 
       log({
         category: "mqtt",
@@ -428,36 +442,91 @@ export default function DeviceControlPanel() {
     (msg: { destinationName: string; payloadString?: string }) => {
       const t = msg.destinationName;
       const p = msg.payloadString || "";
+      const deviceId = t.split("/")[1] || "";
+      const details = p ? (p.length > 100 ? p.substring(0, 100) + "..." : p) : "";
 
-      // Extract device ID if present
-      const deviceIdMatch = t.match(/devices\/([^/]+)/);
-      const deviceId = deviceIdMatch ? deviceIdMatch[1] : undefined;
-
-      let eventType: "heartbeat" | "status" | "event" | "info" = "info";
-      if (t.endsWith("/heartbeat")) eventType = "heartbeat";
-      else if (t.endsWith("/status")) eventType = "status";
-      else if (t.endsWith("/events")) eventType = "event";
-
-      let details: any = p;
-      try {
-        details = JSON.parse(p);
-      } catch (e) {}
+      // Minimal logging - only log device status changes, not every message
+      // console.log('[MQTT]', t);
 
       log({
         category: "mqtt",
         direction: "in",
-        eventType,
+        eventType: "info",
         topic: t,
         deviceId,
         summary: t,
         details,
       });
-      // Console label for inbound device-originated MQTT messages
-      // try { console.log("[DEVICE→ADMIN MQTT]", t, p); } catch (e) {
-      //   const message = e instanceof Error ? e.message : String(e);
-      //   log(`Failed to log message: ${message}`);
-      // }
+
       try {
+        // Handle admin devices snapshot (retained message)
+        if (t === "admin/devices/snapshot") {
+          const devices = JSON.parse(p || "[]") as Array<{
+            deviceId: string;
+            type: DeviceType;
+            name: string;
+            online: boolean;
+            lastSeen?: string;
+            metadata?: any;
+          }>;
+
+          renderDevices((map: Map<string, Device>) => {
+            // Merge snapshot with existing devices
+            // Snapshot devices are ALWAYS offline initially - only real-time messages mark them online
+            const next = new Map<string, Device>(map);
+            devices.forEach((d) => {
+              const existing = next.get(d.deviceId);
+              
+              // If device already exists, keep its current online status
+              // For NEW devices from snapshot, start as OFFLINE - wait for heartbeat/status to mark online
+              const onlineStatus = existing ? existing.online : false;
+              
+              next.set(d.deviceId, {
+                id: d.deviceId,
+                deviceId: d.deviceId,
+                type: d.type || existing?.type || "unknown",
+                name: d.name || existing?.name || d.deviceId,
+                online: onlineStatus, // New devices start offline, existing keep their status
+                lastSeen: existing?.lastSeen || (d.lastSeen ? new Date(d.lastSeen).getTime() : Date.now()),
+              });
+            });
+            return next;
+          });
+          log({ category: "mqtt", direction: "in", eventType: "info", topic: t, summary: `Snapshot: ${devices.length} devices` });
+          return;
+        }
+
+        // Handle Last Will Testament (device offline)
+        // LWT is sent by broker when device disconnects unexpectedly
+        if (t.startsWith("devices/") && t.endsWith("/lwt")) {
+          const id = t.split("/")[1];
+          // Check if payload indicates offline (LWT payload is "offline" or contains status: "offline")
+          const lwtPayload = p.toLowerCase();
+          const isOffline = lwtPayload === "offline" || lwtPayload.includes('"status":"offline"') || lwtPayload.includes('"online":false');
+          
+          // Only mark offline if LWT indicates offline, not if it's "online" (device clearing its LWT)
+          if (isOffline) {
+            console.log(`[DeviceControlPanel] LWT received for ${id} - marking offline`);
+            renderDevices((map: Map<string, Device>) => {
+              const cur = map.get(id);
+              if (cur) {
+                map.set(id, {
+                  ...cur,
+                  online: false,
+                  status: "idle",
+                  playing: false,
+                  lastSeen: Date.now(),
+                });
+              }
+              return new Map(map);
+            });
+            log({ category: "mqtt", direction: "in", eventType: "info", topic: t, deviceId: id, summary: `Device offline (LWT): ${id}` });
+          } else {
+            console.log(`[DeviceControlPanel] LWT received for ${id} with payload: ${p} - NOT marking offline`);
+          }
+          return;
+        }
+
         if (t === "devices/discovery/announce") {
           const d = JSON.parse(p || "{}") as {
             deviceId?: string;
@@ -474,13 +543,19 @@ export default function DeviceControlPanel() {
               name: d.display_name || d.name || id,
               online: false,
             };
-            cur.type = (d.type as DeviceType) || cur.type;
-            cur.name = d.display_name || d.name || cur.name;
-            if (d.display_name) cur.display_name = d.display_name;
-            cur.lastSeen = Date.now();
-            map.set(id, cur);
-            return map;
+            // Create new object to trigger React re-render
+            // Device announcement means device is ONLINE
+            map.set(id, {
+              ...cur,
+              type: (d.type as DeviceType) || cur.type,
+              name: d.display_name || d.name || cur.name,
+              display_name: d.display_name || cur.display_name,
+              online: true, // ✅ Device announcing itself = online
+              lastSeen: Date.now(),
+            });
+            return new Map(map);
           });
+          log({ category: "mqtt", direction: "in", eventType: "info", topic: t, deviceId: id, summary: `Device announced: ${id}` });
         } else if (t.startsWith("devices/") && t.endsWith("/status")) {
           const id = t.split("/")[1];
           const data = JSON.parse(p || "{}") as {
@@ -499,38 +574,65 @@ export default function DeviceControlPanel() {
               rawStatus === "playing"
                 ? "active"
                 : rawStatus === "paused" ||
-                  rawStatus === "stopped" ||
-                  rawStatus === "disconnect" ||
-                  rawStatus === "disconnected"
-                ? "idle"
-                : rawStatus;
-            cur.online = ["active", "idle", "online", "connecting"].includes(status);
-            cur.status = status || cur.status;
+                  rawStatus === "stopped"
+                  ? "idle"
+                  : rawStatus || "idle"; // Default to idle if empty
+            
+            // Device is online if it's sending status messages (unless explicitly disconnected)
+            // Only mark offline if status explicitly says "disconnect" or "disconnected" or "offline"
+            const isDisconnectStatus = ["disconnect", "disconnected", "offline"].includes(rawStatus);
+            const online = !isDisconnectStatus; // Online unless explicitly disconnected
+            
             // Update device type from status payload if provided
             const reportedType = String((data && data.type) || "").toLowerCase();
+            let deviceType = cur.type;
             if (reportedType === "vr" || reportedType === "chair") {
-              cur.type = reportedType as DeviceType;
+              deviceType = reportedType as DeviceType;
             } else if (cur.type === "unknown") {
               // Fallback: infer from deviceId prefix
-              if (/^vr[_-]?/i.test(id)) cur.type = "vr";
-              else if (/^chair[_-]?/i.test(id)) cur.type = "chair";
+              if (/^vr[_-]?/i.test(id)) deviceType = "vr";
+              else if (/^chair[_-]?/i.test(id)) deviceType = "chair";
             }
-            if (typeof data?.positionMs === "number") cur.positionMs = Number(data.positionMs);
-            if (typeof data?.sessionId === "string") cur.sessionId = String(data.sessionId);
-            if (typeof data?.language === "string") cur.language = String(data.language);
-            if (data?.display_name) cur.display_name = data.display_name;
-            cur.lastSeen = Date.now();
-            map.set(id, cur);
-            return map;
+            
+            // Create new object to trigger React re-render
+            map.set(id, {
+              ...cur,
+              online,
+              status: status || cur.status,
+              type: deviceType,
+              positionMs: typeof data?.positionMs === "number" ? Number(data.positionMs) : cur.positionMs,
+              sessionId: typeof data?.sessionId === "string" ? String(data.sessionId) : cur.sessionId,
+              language: typeof data?.language === "string" ? String(data.language) : cur.language,
+              display_name: data?.display_name || cur.display_name,
+              lastSeen: Date.now(),
+            });
+            return new Map(map);
           });
         } else if (t.startsWith("devices/") && t.endsWith("/heartbeat")) {
           const id = t.split("/")[1];
+          const heartbeatData = JSON.parse(p || "{}") as { type?: string; deviceId?: string };
           renderDevices((map: Map<string, Device>) => {
             const cur: Device = map.get(id) || { id, type: "unknown", name: id, online: false };
-            cur.online = true;
-            cur.lastSeen = Date.now();
-            map.set(id, cur);
-            return map;
+            
+            // Update device type from heartbeat payload if provided
+            const reportedType = String(heartbeatData?.type || "").toLowerCase();
+            let deviceType = cur.type;
+            if (reportedType === "vr" || reportedType === "chair") {
+              deviceType = reportedType as DeviceType;
+            } else if (cur.type === "unknown") {
+              // Fallback: infer from deviceId prefix
+              if (/^vr[_-]?/i.test(id)) deviceType = "vr";
+              else if (/^chair[_-]?/i.test(id)) deviceType = "chair";
+            }
+            
+            // Create new object to trigger React re-render
+            map.set(id, {
+              ...cur,
+              type: deviceType,
+              online: true,
+              lastSeen: Date.now(),
+            });
+            return new Map(map);
           });
         } else if (t.startsWith("devices/") && t.endsWith("/events")) {
           const id = t.split("/")[1];
@@ -548,35 +650,46 @@ export default function DeviceControlPanel() {
           const event = String(data?.event || "").toLowerCase();
           renderDevices((map: Map<string, Device>) => {
             const cur: Device = map.get(id) || { id, type: "unknown", name: data?.display_name || id, online: false };
-            // Events imply device is alive
-            cur.online = true;
+            
             // Update device type from event payload if available; otherwise infer from id
             const reportedType = String((data && data.type) || "").toLowerCase();
+            let deviceType = cur.type;
             if (reportedType === "vr" || reportedType === "chair") {
-              cur.type = reportedType as DeviceType;
+              deviceType = reportedType as DeviceType;
             } else if (cur.type === "unknown") {
-              if (/^vr[_-]?/i.test(id)) cur.type = "vr";
-              else if (/^chair[_-]?/i.test(id)) cur.type = "chair";
+              if (/^vr[_-]?/i.test(id)) deviceType = "vr";
+              else if (/^chair[_-]?/i.test(id)) deviceType = "chair";
             }
+            
+            let status = cur.status;
+            let playing = cur.playing;
             if (event === "select_journey" && data?.journeyId != null) {
-              cur.currentJourneyId = Number(data.journeyId);
-            }
-            if (event === "play" || event === "playing" || event === "resume") {
-              cur.status = "active";
-              cur.playing = true;
+              // Journey selection doesn't change playing state
+            } else if (event === "play" || event === "playing" || event === "resume") {
+              status = "active";
+              playing = true;
             } else if (event === "pause" || event === "paused" || event === "stop" || event === "stopped") {
-              cur.status = "idle";
-              cur.playing = false;
+              status = "idle";
+              playing = false;
             }
-            if (typeof data?.positionMs === "number") cur.positionMs = Number(data.positionMs);
-            if (typeof data?.sessionId === "string") cur.sessionId = String(data.sessionId);
-            if (typeof data?.language === "string") cur.language = String(data.language);
-            if (data?.display_name) cur.display_name = data.display_name;
-            cur.lastEvent = event;
-            cur.lastEventTimestamp = String(data?.timestamp || "");
-            cur.lastSeen = Date.now();
-            map.set(id, cur);
-            return map;
+            
+            // Create new object to trigger React re-render
+            map.set(id, {
+              ...cur,
+              online: true, // Events imply device is alive
+              type: deviceType,
+              status,
+              playing,
+              currentJourneyId: event === "select_journey" && data?.journeyId != null ? Number(data.journeyId) : cur.currentJourneyId,
+              positionMs: typeof data?.positionMs === "number" ? Number(data.positionMs) : cur.positionMs,
+              sessionId: typeof data?.sessionId === "string" ? String(data.sessionId) : cur.sessionId,
+              language: typeof data?.language === "string" ? String(data.language) : cur.language,
+              display_name: data?.display_name || cur.display_name,
+              lastEvent: event,
+              lastEventTimestamp: String(data?.timestamp || ""),
+              lastSeen: Date.now(),
+            });
+            return new Map(map);
           });
         }
       } catch (e: unknown) {
@@ -590,156 +703,52 @@ export default function DeviceControlPanel() {
   const connectBroker = useCallback(async () => {
     if (connected) return;
     try {
-      await realtime.connect({ url: mqttUrl.trim(), clientId, username, password, forceBridge });
-      setMode(realtime.currentMode);
+      // Connect to MQTT broker via WebSocket
+      await realtime.connect({ url: mqttWsUrl.trim(), clientId, username, password });
+      setMode("mqtt");
       setConnected(true);
-      log(`${realtime.currentMode === "bridge" ? "Bridge connected to" : "Connected to"} ${mqttUrl}`);
+      log(`Connected to MQTT broker: ${mqttWsUrl}`);
 
+      // Register message handler
       const offMsg = realtime.onMessage((msg) => handleMessage(msg));
-      const offConn = realtime.onConnect(() => setConnected(true));
-      const offDisc = realtime.onDisconnect(() => setConnected(false));
 
-      subscribeTopic("devices/discovery/announce");
-      subscribeTopic("devices/+/status");
-      subscribeTopic("devices/+/heartbeat");
-      subscribeTopic("devices/+/events");
+      // Subscribe to device topics - call realtime.subscribe directly to avoid state timing issues
+      const topics = [
+        "admin/devices/snapshot", // Retained message with all devices
+        "devices/discovery/announce",
+        "devices/+/status",
+        "devices/+/heartbeat",
+        "devices/+/events",
+        "devices/+/lwt", // Last Will Testament for offline detection
+      ];
+      
+      topics.forEach((topic) => {
+        realtime.subscribe(topic, 1);
+        log(`Subscribed to ${topic}`);
+      });
 
-      const offs: Array<() => void> = [offConn, offDisc];
-      if (realtime.currentMode === "bridge") {
-        realtime.emitBridge("devices:get");
-        offs.push(
-          realtime.onBridge("devices:snapshot", (payload: unknown) => {
-            // try { console.log("[DEVICE→ADMIN BRIDGE]","devices:snapshot", payload); } catch (e) {
-            //   const message = e instanceof Error ? e.message : String(e);
-            //   log(`Failed to log message: ${message}`);
-            // }
-            try {
-              if (Array.isArray(payload)) {
-                renderDevices((map: Map<string, Device>) => {
-                  const next = new Map(map);
-                  (payload as Array<Record<string, unknown>>).forEach((d: Record<string, unknown>) => {
-                    if (!d?.deviceId) return;
-                    next.set(d.deviceId as string, {
-                      id: d.deviceId as string,
-                      deviceId: d.deviceId as string,
-                      type: (d.type as DeviceType) || "unknown",
-                      name: (d.display_name as string) || (d.name as string) || (d.deviceId as string),
-                      display_name: d.display_name as string,
-                      online: true,
-                      lastSeen: Date.now(),
-                    });
-                  });
-                  return next;
-                });
-              }
-            } catch (e: unknown) {
-              const message = e instanceof Error ? e.message : String(e);
-              log(`snapshot error: ${message}`);
-            }
-          }),
-        );
-        offs.push(
-          realtime.onBridge("device:discovered", (d: unknown) => {
-            // try { console.log("[DEVICE→ADMIN BRIDGE]","device:discovered", d); } catch (e) {
-            //   const message = e instanceof Error ? e.message : String(e);
-            //   log(`Failed to log message: ${message}`);
-            // }
-            const data = d as { deviceId?: string; type?: DeviceType; name?: string; display_name?: string };
-            if (!data?.deviceId) return;
-            renderDevices((map: Map<string, Device>) => {
-              const cur: Device = map.get(data.deviceId!) || {
-                id: data.deviceId!,
-                deviceId: data.deviceId!,
-                type: "unknown",
-                name: data.deviceId!,
-                online: false,
-              };
-              cur.type = (data.type as DeviceType) || cur.type;
-              cur.name = (data.display_name as string) || (data.name as string) || cur.name;
-              cur.display_name = data.display_name as string;
-              cur.online = true;
-              cur.lastSeen = Date.now();
-              map.set(data.deviceId!, cur);
-              return map;
-            });
-          }),
-        );
-        offs.push(
-          realtime.onBridge("device:heartbeat", (h: unknown) => {
-            const id = (h as { deviceId?: string })?.deviceId;
-            if (!id) return;
-            renderDevices((map: Map<string, Device>) => {
-              const cur: Device = map.get(id) || { id, deviceId: id, type: "unknown", name: id, online: false };
-              cur.online = true;
-              cur.lastSeen = Date.now();
-              map.set(id, cur);
-              return map;
-            });
-          }),
-        );
-        offs.push(
-          realtime.onBridge("device:status", (s: unknown) => {
-            // try { console.log("[DEVICE→ADMIN BRIDGE]","device:status", s); } catch (e) {
-            //   const message = e instanceof Error ? e.message : String(e);
-            //   log(`Failed to log message: ${message}`);
-            // }
-            const id = (s as { deviceId?: string })?.deviceId;
-            if (!id) return;
-            renderDevices((map: Map<string, Device>) => {
-              const cur: Device = map.get(id) || { id, deviceId: id, type: "unknown", name: id, online: false };
-              cur.online = true;
-              cur.lastSeen = Date.now();
-              map.set(id, cur);
-              return map;
-            });
-          }),
-        );
-        offs.push(
-          realtime.onBridge("device:offline", (d: unknown) => {
-            // try { console.log("[DEVICE→ADMIN BRIDGE]","device:offline", d); } catch (e) {
-            //   const message = e instanceof Error ? e.message : String(e);
-            //   log(`Failed to log message: ${message}`);
-            // }
-            const id = (d as { deviceId?: string; type?: DeviceType })?.deviceId;
-            if (!id) return;
-            renderDevices((map: Map<string, Device>) => {
-              const cur: Device = map.get(id) || {
-                id,
-                deviceId: id,
-                type: ((d as { type?: DeviceType })?.type as DeviceType) || "unknown",
-                name: id,
-                online: false,
-              };
-              cur.online = false;
-              // Ensure UI treats playback as paused when device goes offline
-              cur.status = "idle";
-              cur.playing = false;
-              map.set(id, cur);
-              return map;
-            });
-          }),
-        );
-      }
+      // Request a fresh snapshot after subscribing (in case retained message is stale)
+      setTimeout(() => {
+        realtime.publish("admin/devices/request_snapshot", JSON.stringify({ timestamp: Date.now() }), false, 1);
+      }, 1000);
 
-      (window as unknown as { __realtimeOffs?: Array<() => void> }).__realtimeOffs = [offMsg, ...offs];
+      (window as unknown as { __realtimeOffs?: Array<() => void> }).__realtimeOffs = [offMsg];
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : String(e);
       log(`Connect error: ${message}`);
     }
   }, [
     clientId,
-    forceBridge,
     handleMessage,
     log,
-    mqttUrl,
+    mqttWsUrl,
     password,
-    subscribeTopic,
     username,
     connected,
-    renderDevices,
   ]);
 
   useEffect(() => {
+    // Only connect once on mount
     void connectBroker();
     return () => {
       try {
@@ -752,7 +761,41 @@ export default function DeviceControlPanel() {
       (window as unknown as { __realtimeOffs?: Array<() => void> }).__realtimeOffs = [];
       setConnected(false);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty deps - only run once on mount
+
+  // Stale device detection - DISABLED for stability
+  // Devices only go offline via:
+  // 1. LWT (Last Will Testament) when broker detects disconnect
+  // 2. Explicit disconnect message from device
+  // This prevents flickering and false offline detection
+  // 
+  // If you need stale detection, uncomment below with a VERY long threshold (5+ minutes)
+  /*
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const STALE_THRESHOLD = 300000; // 5 minutes - very conservative
+      
+      setDevicesMap((prev) => {
+        let hasChanges = false;
+        const next = new Map(prev);
+        
+        for (const [id, device] of next.entries()) {
+          if (device.online && device.lastSeen && (now - device.lastSeen) > STALE_THRESHOLD) {
+            console.log(`[DeviceControlPanel] Device ${id} marked offline (no heartbeat for ${Math.round((now - device.lastSeen) / 1000)}s)`);
+            hasChanges = true;
+            next.set(id, { ...device, online: false });
+          }
+        }
+        
+        return hasChanges ? next : prev;
+      });
+    }, 60000); // Check every 60 seconds
+
+    return () => clearInterval(interval);
   }, []);
+  */
 
   const sendCmd = useCallback(
     (sessionId: string, type: "play" | "pause" | "seek" | "stop", positionMs?: number, journeyId?: number) => {

@@ -19,7 +19,8 @@ services:
     image: eclipse-mosquitto:2
     container_name: nsc-mqtt
     ports:
-      - "${HOST_IP:-0.0.0.0}:9001:9001"   # MQTT over WebSocket (accessible on LAN)
+      - "${HOST_IP:-0.0.0.0}:1883:1883"   # Standard MQTT (for Unity/devices)
+      - "${HOST_IP:-0.0.0.0}:9001:9001"   # MQTT over WebSocket (for React browser)
     volumes:
       - ./deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto_data:/mosquitto/data
