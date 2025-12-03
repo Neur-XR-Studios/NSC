@@ -109,9 +109,9 @@ export default function IndividualSessionController({
   // Filter out already paired devices AND only show ONLINE devices
   const pairedVrIds = useMemo(() => new Set(sessionPairs.map((p) => p.vrId)), [sessionPairs]);
   const pairedChairIds = useMemo(() => new Set(sessionPairs.map((p) => p.chairId)), [sessionPairs]);
-  const availableVrDevices = useMemo(() => 
-    vrDevices.filter((d) => !pairedVrIds.has(d.id) && (d.online === true || !!onlineById[d.id])), 
-    [vrDevices, pairedVrIds, onlineById]
+  const availableVrDevices = useMemo(
+    () => vrDevices.filter((d) => !pairedVrIds.has(d.id) && (d.online === true || !!onlineById[d.id])),
+    [vrDevices, pairedVrIds, onlineById],
   );
   const availableChairDevices = useMemo(
     () => chairDevices.filter((d) => !pairedChairIds.has(d.id) && (d.online === true || !!onlineById[d.id])),
@@ -714,16 +714,22 @@ export default function IndividualSessionController({
                                           : "border-slate-700 hover:border-slate-600"
                                       }`}
                                       onClick={() => {
+                                        console.log("Selected journey:", jc);
                                         const pid = participantIdByPair[key];
+                                        console.log("Participant ID:", pid);
                                         if (!pid || !activePair?.sessionId) return;
 
                                         const selectedAudioUrl = audioSel[key];
+                                        console.log("Selected audio URL:", selectedAudioUrl);
                                         const tracks = (jc.item.audio_tracks || []) as {
                                           url?: string;
                                           language_code?: string;
                                         }[];
+                                        console.log("Audio tracks:", tracks);
                                         const selectedTrack = tracks.find((t) => t.url === selectedAudioUrl);
+                                        console.log("Selected track:", selectedTrack);
                                         const language = selectedTrack?.language_code || tracks[0]?.language_code || "";
+                                        console.log("Selected language:", language);
 
                                         setSelectedJourneyByPair((prev) => ({ ...prev, [key]: jc.jid }));
 
@@ -731,23 +737,27 @@ export default function IndividualSessionController({
                                           url?: string;
                                           language_code?: string;
                                         }[];
+                                        console.log("New tracks:", newTracks);
                                         if (newTracks.length > 0) {
                                           const preferredTrack =
                                             newTracks.find(
                                               (t: { url?: string; language_code?: string }) =>
                                                 t.language_code === language,
                                             ) || newTracks[0];
+                                          console.log("Preferred track:", preferredTrack);
                                           if (preferredTrack?.url) {
                                             setAudioSel((prev) => ({ ...prev, [key]: preferredTrack.url! }));
+                                            console.log("Selected audio URL:", audioSel[key]);
                                           }
                                         }
-
+                                        console.log("Last");
                                         commandParticipant(activePair.sessionId, pid, "select_journey", {
                                           journeyId: jc.jid,
                                           language: language,
                                         }).catch((e) => {
                                           console.error(`[ControllerStep] Failed to send select_journey:`, e);
                                         });
+                                        console.log("Command sent");
                                       }}
                                     >
                                       {/* Card Image */}
