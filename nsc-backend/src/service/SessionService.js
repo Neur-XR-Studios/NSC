@@ -77,6 +77,7 @@ class SessionService {
     });
 
     // For individual sessions, also register the initial pair as a participant
+    let initialParticipant = null;
     if (type === 'individual') {
       try {
         const participantData = {
@@ -96,15 +97,21 @@ class SessionService {
           participantData
         });
 
-        const participant = await SessionParticipant.create(participantData);
-        logger.info(`[startSession] Successfully created participant ${participant.id} for session ${session.id}`);
+        initialParticipant = await SessionParticipant.create(participantData);
+        logger.info(`[startSession] Successfully created participant ${initialParticipant.id} for session ${session.id}`);
       } catch (e) {
-        logger.error(`[startSession] Failed to create participant for session ${session.id}:`, e.message);
+        logger.error(`[startSession] Failed to create participant for session ${session.id}:`, e.message, e.stack);
         // Non-fatal: participant creation failure should not block session creation
       }
     }
 
-    return { statusCode: httpStatus.OK, response: { status: true, data: session } };
+    // Return session with participant for individual sessions
+    const responseData = {
+      ...session.toJSON(),
+      participants: initialParticipant ? [initialParticipant.toJSON ? initialParticipant.toJSON() : initialParticipant] : [],
+    };
+
+    return { statusCode: httpStatus.OK, response: { status: true, data: responseData } };
   }
 
   /**

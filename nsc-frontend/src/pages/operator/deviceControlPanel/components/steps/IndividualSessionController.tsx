@@ -129,12 +129,25 @@ export default function IndividualSessionController({
   }, [activePair, journeyCards, setSeekValues]);
 
   // Build participantId mapping for Individual sessions (batched updates)
+  // Retry counter to handle race conditions where participant might not be available immediately
+  const retryCountRef = useRef(0);
+  const maxRetries = 3;
+  const retryDelayMs = 500;
+
   useEffect(() => {
     const sid = activePair?.sessionId;
     if (!sid) return;
-    const load = async () => {
+
+    let isMounted = true;
+    let retryTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    const load = async (retryCount = 0) => {
+      if (!isMounted) return;
+
       try {
         const res: SessionDetailsEnvelope = await getSessionById(sid!);
+        if (!isMounted) return;
+
         // If session has been stopped/completed, clear and bail out
         const d = (res?.data ?? undefined) as Record<string, unknown> | undefined;
         const overall = typeof d?.overall_status === "string" ? (d.overall_status as string) : undefined;
@@ -156,6 +169,19 @@ export default function IndividualSessionController({
           return;
         }
         const parts = res?.data?.participants || [];
+
+        // If no participants found and we have retries left, retry after a delay
+        // This handles race conditions where the participant might not be committed yet
+        if (parts.length === 0 && retryCount < maxRetries) {
+          console.log(`[ControllerStep] No participants found for session ${sid}, retrying (${retryCount + 1}/${maxRetries})...`);
+          retryTimeout = setTimeout(() => {
+            if (isMounted) {
+              void load(retryCount + 1);
+            }
+          }, retryDelayMs);
+          return;
+        }
+
         const nextMap: Record<string, string> = {};
         const nextSelected: Record<string, number> = {};
         const nextAudio: Record<string, string> = {};
@@ -188,15 +214,36 @@ export default function IndividualSessionController({
           }
         });
 
-        setParticipantIdByPair((prev) => (JSON.stringify(prev) !== JSON.stringify(nextMap) ? nextMap : prev));
-        setSelectedJourneyByPair((prev) => (Object.keys(nextSelected).length ? { ...prev, ...nextSelected } : prev));
-        setAudioSel((prev) => (Object.keys(nextAudio).length ? { ...prev, ...nextAudio } : prev));
+        if (isMounted) {
+          setParticipantIdByPair((prev) => (JSON.stringify(prev) !== JSON.stringify(nextMap) ? nextMap : prev));
+          setSelectedJourneyByPair((prev) => (Object.keys(nextSelected).length ? { ...prev, ...nextSelected } : prev));
+          setAudioSel((prev) => (Object.keys(nextAudio).length ? { ...prev, ...nextAudio } : prev));
+        }
       } catch (e) {
         console.error(`[ControllerStep] Failed to load participants for session ${sid}:`, e);
+        // Retry on error as well
+        if (retryCount < maxRetries && isMounted) {
+          console.log(`[ControllerStep] Retrying after error (${retryCount + 1}/${maxRetries})...`);
+          retryTimeout = setTimeout(() => {
+            if (isMounted) {
+              void load(retryCount + 1);
+            }
+          }, retryDelayMs);
+        }
       }
     };
-    void load();
-  }, [activePair?.sessionId, journeys]);
+
+    // Reset retry count when session changes
+    retryCountRef.current = 0;
+    void load(0);
+
+    return () => {
+      isMounted = false;
+      if (retryTimeout) {
+        clearTimeout(retryTimeout);
+      }
+    };
+  }, [activePair?.sessionId, journeys, setPairs, setSeekValues]);
 
   useEffect(() => {
     if (!isPlaying) manualPausedRef.current = false;

@@ -26,6 +26,19 @@ export type CreateGroupSessionPayload = {
   members: GroupMember[];
 };
 
+// Participants (Individual flow)
+export type ParticipantRecord = {
+  id: string;
+  session_id: string;
+  vr_device_id: string;
+  chair_device_id: string;
+  language?: string | null;
+  journey_id?: number | null;
+  current_journey_id?: number | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type SessionRecord = {
   id: string;
   status: string;
@@ -33,6 +46,7 @@ export type SessionRecord = {
   journey_id?: string | null;
   video_id?: string | null;
   session_type: SessionType;
+  participants?: ParticipantRecord[];
 };
 
 export async function createIndividualSession(payload: CreateIndividualSessionPayload): Promise<SessionRecord> {
@@ -90,19 +104,6 @@ export async function commandSession(
   if (typeof options?.language === "string") body.language = options.language;
   return api.post(`sessions/${sessionId}/commands`, body);
 }
-
-// Participants (Individual flow)
-export type ParticipantRecord = {
-  id: string;
-  session_id: string;
-  vr_device_id: string;
-  chair_device_id: string;
-  language?: string | null;
-  journey_id?: number | null;
-  current_journey_id?: number | null;
-  created_at?: string;
-  updated_at?: string;
-};
 
 export async function addParticipant(
   sessionId: string,
