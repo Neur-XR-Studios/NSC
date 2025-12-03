@@ -72,11 +72,11 @@ export default function Admin() {
     const load = async () => {
       setLoading(true);
       try {
-        const [usersRes, assetsRes, devicesRes, sessRes] = await Promise.all([
-          api.get("/users", { page: 1, limit: 5 }),
-          api.get("/journeys", { page: 1, limit: 1 }),
-          api.get("/devices", { page: 1, limit: 1 }),
-          api.get("/session-logs", { page: 1, limit: 5 }),
+        const [usersRes, assetsRes, devicePairsRes, sessRes] = await Promise.all([
+          api.get("/users", { params: { page: 1, limit: 5 } }),
+          api.get("/journeys", { params: { page: 1, limit: 100 } }),
+          api.get("/device-pairs"),  // Use device-pairs instead of devices
+          api.get("/session-logs", { params: { page: 1, limit: 5 } }),
         ]);
 
         // Users
@@ -86,12 +86,13 @@ export default function Admin() {
 
         // Journeys
         const aEnv: Envelope<any> = assetsRes as any;
-        const journeysTotal: number = Number(aEnv?.data?.total ?? 0);
+        const journeysTotal: number = Number(aEnv?.data?.total ?? aEnv?.data?.length ?? 0);
 
-        // Devices
-        const dEnv: Envelope<any> = devicesRes as any;
-        const vrLen = Array.isArray(dEnv?.data?.vr) ? dEnv.data.vr.length : 0;
-        const chairsLen = Array.isArray(dEnv?.data?.chairs) ? dEnv.data.chairs.length : 0;
+        // Device Pairs - count unique VR and Chair devices
+        const pairsEnv: Envelope<any> = devicePairsRes as any;
+        const pairs = Array.isArray(pairsEnv?.data) ? pairsEnv.data : [];
+        const vrDevices = new Set(pairs.map((p: any) => p.vr_device_id).filter(Boolean));
+        const chairDevices = new Set(pairs.map((p: any) => p.chair_device_id).filter(Boolean));
 
         // Session logs
         const sEnv: Envelope<SessionLogItem> = sessRes as any;
@@ -102,14 +103,15 @@ export default function Admin() {
         setTotals({ 
           users: usersTotal, 
           journeys: journeysTotal, 
-          vr: vrLen, 
-          chairs: chairsLen, 
+          vr: vrDevices.size, 
+          chairs: chairDevices.size, 
           sessions: sessTotal,
           activeSessions: activeSess
         });
         setRecentUsers(uList);
         setRecentSessions(sList);
-      } catch {
+      } catch (e) {
+        console.error('Dashboard load error:', e);
         // ignore and keep defaults
       } finally {
         setLoading(false);

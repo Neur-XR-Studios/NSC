@@ -72,18 +72,83 @@ app.use(errorConverter);
 app.use(errorHandler);
 const db = require('./models');
 
-// Sync database model - alter: true will update column sizes automatically
-db.sequelize
-  .sync({ alter: true })
-  .then(async () => {
-    console.log('Database synced successfully');
-    // ensure there is at least one admin user
+/**
+ * Run pending database migrations automatically on startup.
+ * This ensures all schema changes are applied without manual intervention.
+ */
+const runMigrations = async () => {
+  try {
+    const { exec } = require('child_process');
+    const path = require('path');
+    const util = require('util');
+    const execPromise = util.promisify(exec);
+    
+    console.log('[DB] Running pending migrations...');
+    
+    const { stdout, stderr } = await execPromise('npx sequelize-cli db:migrate', {
+      cwd: path.resolve(__dirname, '..'),
+      env: { ...process.env }
+    });
+    
+    if (stdout) console.log('[DB] Migration output:', stdout);
+    if (stderr && !stderr.includes('No migrations')) console.warn('[DB] Migration warnings:', stderr);
+    
+    console.log('[DB] Migrations completed successfully');
+  } catch (error) {
+    // Migration errors are non-fatal - the app can still run
+    console.warn('[DB] Migration warning:', error.message);
+  }
+};
+
+/**
+ * Apply critical schema fixes that migrations might miss.
+ * This ensures device ID columns are large enough (VARCHAR(128)).
+ */
+const applySchemaFixes = async () => {
+  try {
+    console.log('[DB] Applying schema fixes...');
+    
+    // Fix device ID column sizes in session_participants
+    await db.sequelize.query(`
+      ALTER TABLE session_participants 
+      MODIFY COLUMN vr_device_id VARCHAR(128),
+      MODIFY COLUMN chair_device_id VARCHAR(128)
+    `).catch(() => {});
+
+    // Fix device ID column size in session_logs
+    await db.sequelize.query(`
+      ALTER TABLE session_logs 
+      MODIFY COLUMN vr_device_id VARCHAR(128)
+    `).catch(() => {});
+
+    console.log('[DB] Schema fixes applied');
+  } catch (e) {
+    // Non-fatal
+    console.warn('[DB] Schema fix warning:', e.message);
+  }
+};
+
+// Initialize database on startup
+(async () => {
+  try {
+    // Run migrations first
+    await runMigrations();
+    
+    // Sync models (creates tables if missing, updates columns)
+    await db.sequelize.sync({ alter: true });
+    console.log('[DB] Database synced successfully');
+    
+    // Apply any schema fixes that sync might miss
+    await applySchemaFixes();
+    
+    // Ensure admin user exists
     const userService = new UserService();
     await userService.ensureAdminExists();
-  })
-  .catch((e) => {
-    // eslint-disable-next-line no-console
-    console.error('Sequelize sync error:', e);
-  });
+    
+    console.log('[DB] Database initialization complete');
+  } catch (e) {
+    console.error('[DB] Database initialization error:', e);
+  }
+})();
 
 module.exports = app;

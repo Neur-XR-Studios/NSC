@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Text;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using RenderHeads.Media.AVProVideo;
 
 // ============================================================================
 // MQTT DEVICE MANAGER FOR UNITY - USING SOCKET.IO BRIDGE
@@ -25,7 +26,7 @@ public class MqttDeviceManager : MonoBehaviour
 
     [Header("🔌 Connection Settings")]
     [Tooltip("Backend server URL (e.g., 192.168.0.190)")]
-    public string serverAddress = "192.168.0.190";
+    public string serverAddress;
 
     [Tooltip("Backend HTTP port (usually 8001)")]
     public int serverPort = 8001;
@@ -70,7 +71,7 @@ public class MqttDeviceManager : MonoBehaviour
 
     private Coroutine heartbeatCoroutine;
     private Coroutine pollingCoroutine;
-    private string baseUrl => $"http://{serverAddress}:{serverPort}";
+    private string baseUrl => $"{serverAddress}:{serverPort}";
 
     #endregion
 
@@ -100,6 +101,7 @@ public class MqttDeviceManager : MonoBehaviour
 
     void Start()
     {
+        serverAddress = GameManager.Instance._IP;
         // Use hardcoded device ID for testing, or generate one
         if (string.IsNullOrEmpty(deviceId))
         {
@@ -109,7 +111,7 @@ public class MqttDeviceManager : MonoBehaviour
             // If still empty, use hardcoded test ID
             if (string.IsNullOrEmpty(deviceId))
             {
-                deviceId = "7f3bc13265afce3118811aff7eeda4c69ebab27c";
+                deviceId = SystemInfo.deviceUniqueIdentifier;
             }
         }
 
@@ -583,52 +585,57 @@ public class MqttDeviceManager : MonoBehaviour
         switch (command.ToLower())
         {
             case "play":
+            case "start":
+            case "resume":
+                // Setup UI for playback
                 GameManager.Instance.AVProParent.SetActive(true);
                 GameManager.Instance.Environment.SetActive(false);
                 GameManager.Instance.adminButton.SetActive(false);
                 GameManager.Instance._NSCUIParent.SetActive(false);
                 GameManager.Instance.messagePanel.SetActive(false);
                 GameManager.Instance.eventType = command;
-                // Extract journeyId from command if present
-                string playJourneyId = data["journeyId"]?.ToString() ?? data["journey_id"]?.ToString();
-                if (!GameManager.Instance.isFirst)
+
+                // Extract journeyId and language from command
+                string cmdJourneyId = data?["journeyId"]?.ToString() ?? data?["journey_id"]?.ToString();
+                string cmdLanguage = data?["language"]?.ToString() ?? _currentLanguage;
+
+                // Check if we need to switch journey
+                bool needsJourneySwitch = !string.IsNullOrEmpty(cmdJourneyId) && cmdJourneyId != _currentJourneyId;
+                
+                if (needsJourneySwitch || !GameManager.Instance.isFirst)
                 {
-                    if (!string.IsNullOrEmpty(playJourneyId) && playJourneyId != _currentJourneyId)
+                    // Update current journey ID
+                    if (!string.IsNullOrEmpty(cmdJourneyId))
                     {
-                        _currentJourneyId = playJourneyId;
-
-                        Debug.Log($"[Device] 🎬 Auto-switching to journey: {playJourneyId}");
-                        OnJourneySelected?.Invoke(playJourneyId);
+                        _currentJourneyId = cmdJourneyId.Replace("[", "").Replace("]", "").Trim();
                     }
-                    string cleanId = _currentJourneyId
-                         .Replace("[", "")
-                         .Replace("]", "")
-                         .Replace("\r", "")
-                         .Replace("\n", "")
-                         .Trim();
-                    int journeyIds = int.Parse(cleanId);
-                    if (int.TryParse(_currentJourneyId, out journeyIds))
-                    {
-                        StartCoroutine(GameManager.Instance.dynamicButtonController.PlayJourneyById(journeyIds, true));
 
-                    }
-                    else
+                    if (!string.IsNullOrEmpty(_currentJourneyId))
                     {
-                        Debug.LogError($"❌ Invalid Journey ID: {_currentJourneyId}");
+                        Debug.Log($"[Device] 🎬 Loading journey: {_currentJourneyId}");
+                        
+                        if (int.TryParse(_currentJourneyId, out int journeyIdInt))
+                        {
+                            // Load journey content (video + audio)
+                            StartCoroutine(LoadAndPlayJourney(journeyIdInt, cmdLanguage, pos ?? 0));
+                            OnJourneySelected?.Invoke(_currentJourneyId);
+                        }
+                        else
+                        {
+                            Debug.LogError($"[Device] ❌ Invalid Journey ID format: {_currentJourneyId}");
+                        }
                     }
                 }
-
-                _isPlaying = true;
-                if (pos.HasValue) _currentPositionMs = pos.Value;
-                var path = GameManager.Instance.mediaPlayer.MediaReference.MediaPath.Path;
-                OnPlayCommand?.Invoke();
-                PlayFromMilliseconds(_currentPositionMs);
-                Debug.Log($"[Device] ▶ Playing from {_currentPositionMs}ms (Journey: {_currentJourneyId})");
-                break;
-            case "start":
-            case "resume":
-                _isPlaying = true;
-                OnPlayCommand?.Invoke();
+                else
+                {
+                    // Journey already loaded, just play
+                    _isPlaying = true;
+                    if (pos.HasValue) _currentPositionMs = pos.Value;
+                    OnPlayCommand?.Invoke();
+                    PlayFromMilliseconds(_currentPositionMs);
+                    Debug.Log($"[Device] ▶ Resuming from {_currentPositionMs}ms (Journey: {_currentJourneyId})");
+                }
+                
                 SendStatus();
                 break;
 
@@ -647,6 +654,7 @@ public class MqttDeviceManager : MonoBehaviour
                 _currentPositionMs = 0;
                 OnStopCommand?.Invoke();
                 SendStatus();
+                GameManager.Instance.RestartScene();
                 break;
 
             case "calibrate":
@@ -656,9 +664,19 @@ public class MqttDeviceManager : MonoBehaviour
             case "seek":
                 if (data != null && data["positionMs"] != null)
                 {
-                    float posi = data["positionMs"].Value<float>();
-                    _currentPositionMs = posi;
-                    OnSeekCommand?.Invoke(posi);
+                    GameManager.Instance.eventType = command;
+                    _currentPositionMs = pos.Value;
+                    PlayFromMilliseconds(_currentPositionMs);
+                    if (command.ToLower() == "pause")
+                    {
+                        GameManager.Instance.mediaPlayer.Control.Pause();
+                    }
+                    else if (command.ToLower() == "play")
+                    {
+                        GameManager.Instance.mediaPlayer.Control.Play();
+                    }
+                    OnSeekCommand?.Invoke(_currentPositionMs);
+                    Debug.Log($"[Device] ⏩ Seeked to {_currentPositionMs}ms");
                     SendStatus();
                 }
                 break;
@@ -724,38 +742,105 @@ public class MqttDeviceManager : MonoBehaviour
     /// </summary>
     private IEnumerator LoadJourneyContent(int journeyId, string language)
     {
-        Debug.Log($"[MQTT Device] 📥 Loading journey {journeyId} with language {language}...");
-        
-        // Get journey data from APIManager
-        var journeyContent = GameManager.Instance.api.GetJourneyById(journeyId);
-        
-        if (journeyContent == null)
+        Debug.Log($"[MQTT Device] 📥 Loading journey {journeyId} with language '{language}'...");
+
+        // Reset ready state
+        _isReady = false;
+
+        // Get video URL by journey ID
+        string selectedVideoUrl = GameManager.Instance.GetVideoUrlByJourneyId(journeyId);
+
+        if (string.IsNullOrEmpty(selectedVideoUrl))
         {
-            Debug.LogWarning($"[MQTT Device] ⚠️ Journey {journeyId} not found in cache, fetching from server...");
-            // Journey not in cache, need to fetch session data first
-            yield return GameManager.Instance.api.PostSessionId();
-            journeyContent = GameManager.Instance.api.GetJourneyById(journeyId);
-        }
-        
-        if (journeyContent != null)
-        {
-            Debug.Log($"[MQTT Device] ✅ Journey loaded: {journeyContent.videoTitle}");
-            Debug.Log($"[MQTT Device] 📹 Video URL: {journeyContent.videoUrl}");
-            
-            // Prepare the video (load but don't play)
-            if (GameManager.Instance.dynamicButtonController != null)
+            // Fallback: try to get from API manager dictionary
+            var journeyContent = GameManager.Instance.api.GetJourneyById(journeyId);
+            if (journeyContent != null)
             {
-                // Use the existing method to load the journey
-                yield return GameManager.Instance.dynamicButtonController.PlayJourneyById(journeyId, false);
+                selectedVideoUrl = journeyContent.videoUrl;
             }
-            
-            _isReady = true;
-            Debug.Log($"[MQTT Device] ✅ Journey {journeyId} ready for playback");
         }
-        else
+
+        if (string.IsNullOrEmpty(selectedVideoUrl))
         {
-            Debug.LogError($"[MQTT Device] ❌ Failed to load journey {journeyId}");
+            Debug.LogError($"[MQTT Device] ❌ Journey ID {journeyId} not found! Available: {string.Join(", ", GameManager.Instance.videoJourneyIds)}");
+            yield break;
         }
+
+        Debug.Log($"[MQTT Device] 📹 Video URL: {selectedVideoUrl}");
+
+        // Load video (prepare but do not play)
+        GameManager.Instance.mediaPlayer.OpenMedia(
+            MediaPathType.AbsolutePathOrURL,
+            selectedVideoUrl,
+            autoPlay: false
+        );
+
+        // Load audio with language preference
+        yield return StartCoroutine(GameManager.Instance.api.PlayJourneyById(journeyId, false, language));
+
+        yield return new WaitForSeconds(0.3f);
+
+        _isReady = true;
+        GameManager.Instance.isFirst = false;  // Reset so next play command loads journey
+        Debug.Log($"[MQTT Device] ✅ Journey {journeyId} ready for playback.");
+    }
+
+    /// <summary>
+    /// Load journey and start playback from specified position
+    /// </summary>
+    private IEnumerator LoadAndPlayJourney(int journeyId, string language, float startPositionMs)
+    {
+        Debug.Log($"[MQTT Device] 🎬 LoadAndPlayJourney: ID={journeyId}, Lang={language}, Pos={startPositionMs}ms");
+
+        // Get video URL
+        string videoUrl = GameManager.Instance.GetVideoUrlByJourneyId(journeyId);
+        
+        if (string.IsNullOrEmpty(videoUrl))
+        {
+            // Fallback to API dictionary
+            var journeyContent = GameManager.Instance.api.GetJourneyById(journeyId);
+            if (journeyContent != null)
+            {
+                videoUrl = journeyContent.videoUrl;
+            }
+        }
+
+        if (string.IsNullOrEmpty(videoUrl))
+        {
+            Debug.LogError($"[MQTT Device] ❌ Cannot find video for journey {journeyId}");
+            yield break;
+        }
+
+        Debug.Log($"[MQTT Device] 📹 Opening video: {videoUrl}");
+
+        // Open video
+        GameManager.Instance.mediaPlayer.OpenMedia(
+            MediaPathType.AbsolutePathOrURL,
+            videoUrl,
+            autoPlay: false
+        );
+
+        // Wait for video to be ready
+        yield return new WaitForSeconds(0.3f);
+
+        // Load audio
+        yield return StartCoroutine(GameManager.Instance.api.PlayJourneyById(journeyId, true, language));
+
+        // Set position and start playback
+        _currentPositionMs = startPositionMs;
+        _isPlaying = true;
+        GameManager.Instance.isFirst = true;
+
+        // Start video playback
+        GameManager.Instance.mediaPlayer.Control.Play();
+        
+        if (startPositionMs > 0)
+        {
+            PlayFromMilliseconds(startPositionMs);
+        }
+
+        OnPlayCommand?.Invoke();
+        Debug.Log($"[MQTT Device] ▶ Playing journey {journeyId} from {startPositionMs}ms");
     }
 
     private bool _isReady = false;
@@ -793,6 +878,12 @@ public class MqttDeviceManager : MonoBehaviour
         {
             //Debug.LogError("MediaPlayer not assigned or not ready!");
             return;
+        }
+        else
+        {
+            positionSeconds = positionMs / 1000f;
+            GameManager.Instance.mediaPlayer.Control.Seek(positionSeconds);
+
         }
         if (GameManager.Instance.audioSource.clip != null)
         {

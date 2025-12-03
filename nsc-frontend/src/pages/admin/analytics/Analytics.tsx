@@ -313,7 +313,7 @@ export default function Analytics() {
                         <ResponsiveContainer width="100%" height={300}>
                             <BarChart data={analytics.sessions.byType}>
                                 <CartesianGrid strokeDasharray="3 3" />
-                                <XAxis dataKey="type" />
+                                <XAxis dataKey="session_type" />
                                 <YAxis />
                                 <Tooltip />
                                 <Legend />

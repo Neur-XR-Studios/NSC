@@ -1,4 +1,4 @@
-const { Session, SessionParticipant, Journey } = require('../models');
+const { Session, SessionParticipant, journey: Journey } = require('../models');
 const { Op } = require('sequelize');
 const { sequelize } = require('../models');
 
@@ -172,7 +172,7 @@ class AnalyticsService {
                 try {
                     const journey = await Journey.findByPk(journeyId);
                     if (journey) {
-                        journeyName = journey.name || journeyName;
+                        journeyName = journey.title || journeyName;
                     }
                 } catch (e) {
                     // Journey model might not exist, use default name

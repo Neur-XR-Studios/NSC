@@ -12,7 +12,7 @@ export interface AnalyticsOverview {
 export interface SessionMetrics {
   total: number;
   byStatus: Array<{ overall_status: string; count: number }>;
-  byType: Array<{ type: string; count: number }>;
+  byType: Array<{ session_type: string; count: number }>;
   overTime: Array<{ date: string; count: number }>;
 }
 

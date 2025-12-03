@@ -558,7 +558,7 @@ public class APIManager : MonoBehaviour
             yield break;
         }
 
-        if (GameManager.Instance.isGroupUser)
+        //if (GameManager.Instance.isGroupUser)
             AssignJourneyData(response.data.journeys);
     }
 
@@ -577,6 +577,8 @@ public class APIManager : MonoBehaviour
         GameManager.Instance.videoUrlList.Clear();
         GameManager.Instance.expAudioUrlList.Clear();
         GameManager.Instance.expAudioLangList.Clear();
+        GameManager.Instance.videoJourneyIds.Clear();  // Clear journey IDs list
+        GameManager.Instance.videoThumbnailUrlList.Clear();  // Clear thumbnails
         journeyDataDict.Clear();
 
         foreach (var j in journeys)
@@ -613,6 +615,7 @@ public class APIManager : MonoBehaviour
             GameManager.Instance.videoDesc.Add(videoDesc);
             GameManager.Instance.videoUserSprites.Add(null);
             GameManager.Instance.videoUrlList.Add(videoUrl);
+            GameManager.Instance.videoJourneyIds.Add(journeyId.ToString());  // Add journey ID to list
             GameManager.Instance.expAudioUrlList.Add(audioUrls);
             GameManager.Instance.expAudioLangList.Add(audioLangs);
             GameManager.Instance.videoThumbnailUrlList.Add(thumbnailUrl);
@@ -632,8 +635,7 @@ public class APIManager : MonoBehaviour
         }
 
         GameManager.Instance.videoButtonCount = journeys.Length;
-        if (DynamicButtonController.Instance != null)
-            Debug.Log($"✅ Stored {journeys.Length} journeys in dictionary for quick lookup.");
+        Debug.Log($"✅ Stored {journeys.Length} journeys. IDs: {string.Join(", ", GameManager.Instance.videoJourneyIds)}");
     }
 
     public JourneyContent GetJourneyById(int journeyId)
@@ -647,6 +649,97 @@ public class APIManager : MonoBehaviour
 
     #endregion
 
+    public IEnumerator PlayJourneyById(int journeyId, bool isAudioPlay, string languageCode = "")
+    {
+        var data = APIManager.Instance.GetJourneyById(journeyId);
+
+        if (data == null)
+        {
+            Debug.LogWarning($"⚠️ Journey ID {journeyId} not found in APIManager.");
+            yield break;
+        }
+
+        string videoUrl = data.videoUrl;
+        if (!string.IsNullOrEmpty(videoUrl))
+        {
+            Debug.Log($"▶️ Playing video for Journey ID {journeyId}: {videoUrl}");
+            GameManager.Instance.AVProParent.SetActive(true);
+            GameManager.Instance.Environment.SetActive(false);
+            GameManager.Instance.mediaPlayer.transform.parent.gameObject.SetActive(true);
+
+            GameManager.Instance.mediaPlayer.OpenMedia(
+                new RenderHeads.Media.AVProVideo.MediaPath(videoUrl, RenderHeads.Media.AVProVideo.MediaPathType.AbsolutePathOrURL),
+                false
+            );
+        }
+        else
+        {
+            Debug.LogWarning($"⚠️ No video URL found for Journey ID {journeyId}");
+        }
+
+        string selectedAudioUrl = null;
+
+        if (data.audioUrls != null && data.audioUrls.Length > 0)
+        {
+            if (!string.IsNullOrEmpty(languageCode))
+            {
+                for (int i = 0; i < data.audioLangs.Length; i++)
+                {
+                    if (string.Equals(data.audioLangs[i], languageCode, StringComparison.OrdinalIgnoreCase))
+                    {
+                        selectedAudioUrl = data.audioUrls[i];
+                        break;
+                    }
+                }
+            }
+
+            if (string.IsNullOrEmpty(selectedAudioUrl))
+                selectedAudioUrl = data.audioUrls[0];
+
+            if (!string.IsNullOrEmpty(selectedAudioUrl))
+            {
+                Debug.Log($"🎧 Playing audio ({languageCode}) for Journey ID {journeyId}: {selectedAudioUrl}");
+                yield return StartCoroutine(PlayAudioClip(selectedAudioUrl, "journeySelected", isAudioPlay));
+            }
+            else
+            {
+                Debug.LogWarning($"⚠️ No valid audio URL found for Journey ID {journeyId}");
+            }
+        }
+        else
+        {
+            Debug.LogWarning($"⚠️ No audio tracks found for Journey ID {journeyId}");
+        }
+    }
+   
+
+    #region Audio Playback
+    private IEnumerator PlayAudioClip(string url, string type, bool isAudioPlay)
+    {
+        using (UnityWebRequest request = UnityWebRequestMultimedia.GetAudioClip(url, AudioType.MPEG))
+        {
+            yield return request.SendWebRequest();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                AudioClip clip = DownloadHandlerAudioClip.GetContent(request);
+                GameManager.Instance.audioSource.clip = clip;
+
+                if (isAudioPlay)
+                {
+                    GameManager.Instance.audioSource.Play();
+                    GameManager.Instance.isFirst = true;
+                }
+            }
+            else
+            {
+                Debug.LogError("Audio load error: " + request.error);
+            }
+        }
+    }
+
+    
+    #endregion
     #region API: Thumbnails & Logs ------------------------------------
 
     public IEnumerator LoadThumbnail(string url, Image targetImage)
