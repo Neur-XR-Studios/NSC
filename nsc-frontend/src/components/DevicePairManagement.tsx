@@ -15,23 +15,23 @@ export default function DevicePairManagement() {
   const [showOnlineOnly, setShowOnlineOnly] = useState(false);
   const [bundleModalOpen, setBundleModalOpen] = useState(false);
   const [bundleTargetPairId, setBundleTargetPairId] = useState<string | null>(null);
-  
+
   // Real-time online status tracking via MQTT
   const [onlineDeviceIds, setOnlineDeviceIds] = useState<Set<string>>(new Set());
-  
+
   // MQTT message handler for real-time online status
   const handleMqttMessage = useCallback((msg: { destinationName: string; payloadString?: string }) => {
     const topic = msg.destinationName;
     const payload = msg.payloadString || "";
-    
+
     try {
       // Handle device status updates
       if (topic.match(/^devices\/[^/]+\/status$/)) {
         const deviceId = topic.split("/")[1];
         const data = JSON.parse(payload);
         const isOnline = data.status !== "offline" && data.status !== "disconnected";
-        
-        setOnlineDeviceIds(prev => {
+
+        setOnlineDeviceIds((prev) => {
           const next = new Set(prev);
           if (isOnline) {
             next.add(deviceId);
@@ -41,36 +41,36 @@ export default function DevicePairManagement() {
           return next;
         });
       }
-      
+
       // Handle heartbeats - device is online if sending heartbeats
       if (topic.match(/^devices\/[^/]+\/heartbeat$/)) {
         const deviceId = topic.split("/")[1];
         console.log(`[DevicePairManagement] Heartbeat from ${deviceId}`);
-        setOnlineDeviceIds(prev => {
+        setOnlineDeviceIds((prev) => {
           const next = new Set(prev);
           next.add(deviceId);
           return next;
         });
       }
-      
+
       // Handle LWT (Last Will Testament) - device went offline
       if (topic.match(/^devices\/[^/]+\/lwt$/)) {
         const deviceId = topic.split("/")[1];
         if (payload.toLowerCase() === "offline") {
-          setOnlineDeviceIds(prev => {
+          setOnlineDeviceIds((prev) => {
             const next = new Set(prev);
             next.delete(deviceId);
             return next;
           });
         }
       }
-      
+
       // Handle device snapshot
       if (topic === "admin/devices/snapshot") {
         const devices = JSON.parse(payload) as Array<{ deviceId: string; online?: boolean }>;
-        setOnlineDeviceIds(prev => {
+        setOnlineDeviceIds((prev) => {
           const next = new Set(prev);
-          devices.forEach(d => {
+          devices.forEach((d) => {
             if (d.online === true) {
               next.add(d.deviceId);
             }
@@ -82,45 +82,45 @@ export default function DevicePairManagement() {
       // Ignore parse errors
     }
   }, []);
-  
+
   // Connect to MQTT for real-time updates
   useEffect(() => {
     const connectMqtt = async () => {
       try {
         const wsHost = window.location.hostname || "localhost";
-        
+
         // Check if already connected
         if (!realtime.isConnected) {
           console.log("[DevicePairManagement] Connecting to MQTT...");
           // Use forceBridge to use Socket.IO bridge instead of raw MQTT (avoids Paho issues)
-          await realtime.connect({ 
-            url: `http://${wsHost}:8001`, 
+          await realtime.connect({
+            url: `http://${wsHost}:8001`,
             clientId: `admin-devices-${Date.now()}`,
-            forceBridge: true 
+            forceBridge: true,
           });
         } else {
           console.log("[DevicePairManagement] MQTT already connected");
         }
-        
+
         // Subscribe to device topics
         realtime.subscribe("devices/+/status", 1);
         realtime.subscribe("devices/+/heartbeat", 1);
         realtime.subscribe("devices/+/lwt", 1);
         realtime.subscribe("admin/devices/snapshot", 1);
-        
+
         console.log("[DevicePairManagement] Subscribed to device topics");
-        
+
         // Request snapshot
         realtime.publish("admin/devices/snapshot/request", "{}", false);
       } catch (e) {
         console.error("[DevicePairManagement] MQTT connect error:", e);
       }
     };
-    
+
     // Register message handler
     const unsubscribe = realtime.onMessage(handleMqttMessage);
     void connectMqtt();
-    
+
     return () => {
       unsubscribe();
     };
@@ -132,12 +132,6 @@ export default function DevicePairManagement() {
       const result = showOnlineOnly ? await getOnlineDevicePairs() : await getDevicePairs(false);
       const list = Array.isArray(result?.data) ? result.data : [];
       setPairs(list);
-      if (list.length === 0) {
-        toast({
-          title: "No pairs",
-          description: showOnlineOnly ? "No online device pairs found" : "No device pairs found",
-        });
-      }
     } catch (error) {
       console.log(error);
       toast({
@@ -159,19 +153,11 @@ export default function DevicePairManagement() {
 
     try {
       const result = await deleteDevicePair(pairId);
-      if (result.status) {
-        toast({
-          title: "Success",
-          description: "Device pair deleted successfully",
-        });
-        void loadPairs();
-      } else {
-        toast({
-          title: "Error",
-          description: "Failed to delete device pair",
-          variant: "destructive",
-        });
-      }
+      toast({
+        title: "Success",
+        description: "Device pair deleted successfully",
+      });
+      void loadPairs();
     } catch (error) {
       console.log(error);
       toast({
@@ -197,16 +183,17 @@ export default function DevicePairManagement() {
   const isDeviceOnline = (deviceId?: string) => {
     if (!deviceId) return false;
     const isOnline = onlineDeviceIds.has(deviceId);
-    console.log(`[DevicePairManagement] isDeviceOnline(${deviceId}) = ${isOnline}, onlineDevices:`, Array.from(onlineDeviceIds));
+    console.log(
+      `[DevicePairManagement] isDeviceOnline(${deviceId}) = ${isOnline}, onlineDevices:`,
+      Array.from(onlineDeviceIds),
+    );
     return isOnline;
   };
 
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
-        <div>
-
-        </div>
+        <div></div>
         <div className="flex items-center gap-3">
           <Button onClick={() => void loadPairs()} disabled={loading} className={customCss.buttonOutline}>
             <RefreshCw className="w-4 h-4" /> Refresh
