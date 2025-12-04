@@ -1,7 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { AlertCircle, ArrowLeft, ArrowRight, Check, Monitor, Armchair, Plus, Wifi, WifiOff, PlugZap } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  Monitor,
+  Armchair,
+  Plus,
+  Wifi,
+  WifiOff,
+  PlugZap,
+} from "lucide-react";
 import type { SessionType } from "@/lib/sessions";
 import { getDevicePairs, type DevicePair } from "@/lib/devicePairs";
 import { CreatePairingCodeModal } from "@/components/modals/CreatePairingCodeModal";
@@ -68,54 +79,55 @@ export default function DeviceSelectionStep({
   const [loading, setLoading] = useState(false);
   const [pairingModalOpen, setPairingModalOpen] = useState(false);
   const [repairTargetId, setRepairTargetId] = useState<string | null>(null);
-  
+
   // STABLE online status tracking - only updates when status ACTUALLY changes
   const [onlineDevices, setOnlineDevices] = useState<Set<string>>(new Set());
-  
+
   // Update online devices set when vrDevices/chairDevices change
   // ONLY use the explicit `online` property - no lastSeen fallback
   useEffect(() => {
     const newOnlineSet = new Set<string>();
-    
+
     // Add all online VR devices - ONLY if online === true
-    vrDevices.forEach(d => {
+    vrDevices.forEach((d) => {
       if (d.online === true) {
         newOnlineSet.add(d.id);
       }
     });
-    
+
     // Add all online Chair devices - ONLY if online === true
-    chairDevices.forEach(d => {
+    chairDevices.forEach((d) => {
       if (d.online === true) {
         newOnlineSet.add(d.id);
       }
     });
-    
+
     // Only update state if the set actually changed
-    setOnlineDevices(prev => {
+    setOnlineDevices((prev) => {
       const prevArray = Array.from(prev).sort();
       const newArray = Array.from(newOnlineSet).sort();
-      if (prevArray.join(',') === newArray.join(',')) {
+      if (prevArray.join(",") === newArray.join(",")) {
         return prev; // No change, keep same reference
       }
-      console.log('[DeviceSelection] Online devices changed:', Array.from(newOnlineSet));
+      console.log("[DeviceSelection] Online devices changed:", Array.from(newOnlineSet));
       return newOnlineSet;
     });
   }, [vrDevices, chairDevices]);
 
   // Simple check if device is online - uses stable onlineDevices set
-  const isDeviceOnline = useCallback((deviceId: string) => {
-    return onlineDevices.has(deviceId);
-  }, [onlineDevices]);
+  const isDeviceOnline = useCallback(
+    (deviceId: string) => {
+      return onlineDevices.has(deviceId);
+    },
+    [onlineDevices],
+  );
 
   // Load device pairs from backend
   const loadDevicePairs = async () => {
     setLoading(true);
     try {
       const result = await getDevicePairs(false);
-      const list: DevicePair[] = Array.isArray(result?.data)
-        ? (result.data as DevicePair[])
-        : [];
+      const list: DevicePair[] = Array.isArray(result?.data) ? (result.data as DevicePair[]) : [];
 
       console.log("Device pairs:", list);
       // Just store the pairs - online status will be computed by enrichedPairsWithStatus
@@ -151,7 +163,7 @@ export default function DeviceSelectionStep({
       // Use stable onlineDevices set for status
       const vrOnline = isDeviceOnline(pair.vr_device_id);
       const chairOnline = isDeviceOnline(pair.chair_device_id);
-      
+
       return {
         ...pair,
         vrOnline,
@@ -174,7 +186,8 @@ export default function DeviceSelectionStep({
   const togglePairSelection = (pairId: string, bothOnline: boolean) => {
     // Allow selection regardless of online status - don't block the user
     // The session start will handle if devices are actually available
-    if (false && !bothOnline) { // DISABLED - always allow selection
+    if (false && !bothOnline) {
+      // DISABLED - always allow selection
       toast({
         title: "Cannot select pair",
         description: "Both VR and Chair must be online to select this pair",
@@ -233,7 +246,7 @@ export default function DeviceSelectionStep({
 
   return (
     <>
-      <Card className="w-full max-w-6xl mx-auto">
+      <Card className="w-full min-w-6xl mx-auto">
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="text-2xl font-bold">
@@ -265,9 +278,7 @@ export default function DeviceSelectionStep({
             </div>
           ) : filteredPairs.length === 0 ? (
             <Card className="p-12 text-center">
-              <p className="text-muted-foreground text-lg mb-4">
-                No device pairs created yet
-              </p>
+              <p className="text-muted-foreground text-lg mb-4">No device pairs created yet</p>
               <Button onClick={handleOpenNewPair} className={customCss.button}>
                 Create Your First Pair
               </Button>
@@ -282,16 +293,17 @@ export default function DeviceSelectionStep({
                 return (
                   <Card
                     key={pair.id}
-                    className={`p-4 cursor-pointer transition-all ${isSelected
-                      ? "border-primary bg-primary/5 ring-2 ring-primary"
-                      : "hover:border-primary/50"
-                      }`}
+                    className={`p-4 cursor-pointer transition-all ${
+                      isSelected ? "border-primary bg-primary/5 ring-2 ring-primary" : "hover:border-primary/50"
+                    }`}
                     onClick={() => togglePairSelection(pair.id, canSelect)}
                   >
                     <div className="space-y-3">
                       <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <h3 className="font-semibold text-lg">{pair.pair_name}</h3>
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-semibold text-lg truncate" title={pair.pair_name}>
+                            {pair.pair_name}
+                          </h3>
                           <div className="flex items-center gap-2 mt-1">
                             {pair.bothOnline ? (
                               <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
@@ -331,16 +343,27 @@ export default function DeviceSelectionStep({
                       <div className="space-y-2 pt-2 border-t">
                         <div className="flex items-center gap-2">
                           <Monitor className={`w-4 h-4 ${pair.vrOnline ? "text-green-500" : "text-gray-400"}`} />
-                          <div className="flex-1 text-sm">
-                            <div className="font-medium">VR: {pair.vr?.display_name || pair.vr?.id || "N/A"}</div>
-                            <div className="text-xs text-muted-foreground truncate">{pair.vr?.id}</div>
+                          <div className="flex-1 text-sm min-w-0">
+                            <div className="font-medium truncate" title={pair.vr?.display_name || pair.vr?.id || "N/A"}>
+                              VR: {pair.vr?.display_name || pair.vr?.id || "N/A"}
+                            </div>
+                            <div className="text-xs text-muted-foreground truncate" title={pair.vr?.id}>
+                              {pair.vr?.id}
+                            </div>
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
                           <Armchair className={`w-4 h-4 ${pair.chairOnline ? "text-green-500" : "text-gray-400"}`} />
-                          <div className="flex-1 text-sm">
-                            <div className="font-medium">Chair: {pair.chair?.display_name || pair.chair?.id || "N/A"}</div>
-                            <div className="text-xs text-muted-foreground truncate">{pair.chair?.id}</div>
+                          <div className="flex-1 text-sm min-w-0">
+                            <div
+                              className="font-medium truncate"
+                              title={pair.chair?.display_name || pair.chair?.id || "N/A"}
+                            >
+                              Chair: {pair.chair?.display_name || pair.chair?.id || "N/A"}
+                            </div>
+                            <div className="text-xs text-muted-foreground truncate" title={pair.chair?.id}>
+                              {pair.chair?.id}
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -365,7 +388,7 @@ export default function DeviceSelectionStep({
                 {Array.from(selectedPairIds)
                   .map((pairId) => {
                     const pair = devicePairs.find((p) => p.id === pairId);
-                    return pair ? pair.pair_name : pairId;
+                    return pair ? pair.pair_name.slice(0, 20) + "..." : pairId.slice(0, 20) + "...";
                   })
                   .join(", ")}
               </div>

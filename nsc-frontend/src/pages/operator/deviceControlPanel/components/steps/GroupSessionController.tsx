@@ -651,8 +651,12 @@ export default function GroupSessionController({
                       <div className="relative">
                         {sessionOfflineDevices?.includes(p.vrId) || sessionOfflineDevices?.includes(p.chairId) ? (
                           <div className="w-full aspect-video bg-red-500/50 flex items-center justify-center text-white absolute top-0 left-0 z-10 font-bold text-2xl text-shadow text-pretty">
-                            {sessionOfflineDevices?.includes(p.vrId) ? `${p.vrId} Device Offline` : null}
-                            {sessionOfflineDevices?.includes(p.chairId) ? `${p.chairId} Device Offline` : null}
+                            {sessionOfflineDevices?.includes(p.vrId)
+                              ? `${p.vrId.slice(0, 5)}... Device Offline `
+                              : null}
+                            {sessionOfflineDevices?.includes(p.chairId)
+                              ? `${p.chairId.slice(0, 5)}... Device Offline`
+                              : null}
                           </div>
                         ) : (
                           <></>
@@ -691,7 +695,7 @@ export default function GroupSessionController({
                           <div className="flex items-center gap-2">
                             <Headset className="w-4 h-4 text-purple-400" />
                             <span className="text-xs text-white font-medium truncate" title={p.vrId}>
-                              {p.vrId}
+                              {p.vrId.slice(0, 5)}...
                             </span>
                             <span
                               className={`rounded-full ${
@@ -707,7 +711,7 @@ export default function GroupSessionController({
                           <div className="flex items-center gap-2">
                             <Armchair className="w-4 h-4 text-blue-400" />
                             <span className="text-xs text-white font-medium truncate" title={p.chairId}>
-                              {p.chairId}
+                              {p.chairId.slice(0, 5)}...
                             </span>
                             <span
                               className={`rounded-full ${

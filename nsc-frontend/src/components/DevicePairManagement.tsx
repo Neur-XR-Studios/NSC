@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { getDevicePairs, getOnlineDevicePairs, deleteDevicePair, type DevicePair } from "@/lib/devicePairs";
-import { Plus, Trash2, Wifi, WifiOff, Monitor, Armchair, RefreshCw, PlugZap } from "lucide-react";
+import { Plus, Trash2, Wifi, WifiOff, Monitor, Armchair, RefreshCw, PlugZap, Copy, Check } from "lucide-react";
 import { CreatePairingCodeModal } from "@/components/modals/CreatePairingCodeModal";
 import { customCss } from "@/lib/customCss";
 import { realtime } from "@/lib/realtime";
@@ -18,6 +18,7 @@ export default function DevicePairManagement() {
 
   // Real-time online status tracking via MQTT
   const [onlineDeviceIds, setOnlineDeviceIds] = useState<Set<string>>(new Set());
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   // MQTT message handler for real-time online status
   const handleMqttMessage = useCallback((msg: { destinationName: string; payloadString?: string }) => {
@@ -190,6 +191,64 @@ export default function DevicePairManagement() {
     return isOnline;
   };
 
+  const handleCopy = (text: string, label: string, uniqueId: string) => {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard
+        .writeText(text)
+        .then(() => {
+          toast({
+            title: "Copied",
+            description: `${label} copied to clipboard`,
+          });
+          setCopiedId(uniqueId);
+          setTimeout(() => setCopiedId(null), 2000);
+        })
+        .catch(() => {
+          toast({
+            title: "Error",
+            description: "Failed to copy to clipboard",
+            variant: "destructive",
+          });
+        });
+    } else {
+      // Fallback for non-secure contexts
+      try {
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+
+        // Ensure it's not visible but part of the DOM
+        textArea.style.position = "fixed";
+        textArea.style.left = "-9999px";
+        textArea.style.top = "0";
+        document.body.appendChild(textArea);
+
+        textArea.focus();
+        textArea.select();
+
+        const successful = document.execCommand("copy");
+        document.body.removeChild(textArea);
+
+        if (successful) {
+          toast({
+            title: "Copied",
+            description: `${label} copied to clipboard`,
+          });
+          setCopiedId(uniqueId);
+          setTimeout(() => setCopiedId(null), 2000);
+        } else {
+          throw new Error("Copy command failed");
+        }
+      } catch (err) {
+        console.error("Fallback copy failed", err);
+        toast({
+          title: "Error",
+          description: "Failed to copy to clipboard",
+          variant: "destructive",
+        });
+      }
+    }
+  };
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
@@ -236,8 +295,12 @@ export default function DevicePairManagement() {
             return (
               <Card key={pair.id} className="p-4 space-y-3">
                 <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <h3 className="font-semibold text-lg">{pair.pair_name}</h3>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-semibold text-lg text-primary truncate" title={pair.pair_name}>
+                        {pair.pair_name}
+                      </h3>
+                    </div>
                     <div className="flex items-center gap-2 mt-1">
                       {bothOnline ? (
                         <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
@@ -258,6 +321,19 @@ export default function DevicePairManagement() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-8 w-8 p-0"
+                      onClick={() => handleCopy(pair.pair_name, "Pair Name", `pair-${pair.id}`)}
+                      title="Copy Pair Name"
+                    >
+                      {copiedId === `pair-${pair.id}` ? (
+                        <Check className="w-4 h-4 text-green-500" />
+                      ) : (
+                        <Copy className="w-4 h-4" />
+                      )}
+                    </Button>
                     <Button
                       size="sm"
                       variant="ghost"
@@ -281,16 +357,60 @@ export default function DevicePairManagement() {
                 <div className="space-y-2 pt-2 border-t">
                   <div className="flex items-center gap-2">
                     <Monitor className={`w-4 h-4 ${vrOnline ? "text-green-500" : "text-gray-400"}`} />
-                    <div className="flex-1 text-sm">
-                      <div className="font-medium">VR: {pair.vr?.display_name || pair.vr?.id || "N/A"}</div>
-                      <div className="text-xs text-muted-foreground">{pair.vr?.deviceId}</div>
+                    <div className="flex-1 text-sm min-w-0">
+                      <div className="font-medium truncate" title={pair.vr?.display_name || pair.vr?.id || "N/A"}>
+                        VR: {pair.vr?.display_name || pair.vr?.id || "N/A"}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <div className="text-xs text-muted-foreground truncate" title={pair.vr?.deviceId}>
+                          {pair.vr?.deviceId}
+                        </div>
+                        {pair.vr?.deviceId && (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                            onClick={() => handleCopy(pair.vr?.deviceId || "", "VR Device ID", `vr-${pair.id}`)}
+                            title="Copy VR Device ID"
+                          >
+                            {copiedId === `vr-${pair.id}` ? (
+                              <Check className="w-4 h-4 text-green-500" />
+                            ) : (
+                              <Copy className="w-4 h-4" />
+                            )}
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
                     <Armchair className={`w-4 h-4 ${chairOnline ? "text-green-500" : "text-gray-400"}`} />
-                    <div className="flex-1 text-sm">
-                      <div className="font-medium">Chair: {pair.chair?.display_name || pair.chair?.id || "N/A"}</div>
-                      <div className="text-xs text-muted-foreground">{pair.chair?.deviceId}</div>
+                    <div className="flex-1 text-sm min-w-0">
+                      <div className="font-medium truncate" title={pair.chair?.display_name || pair.chair?.id || "N/A"}>
+                        Chair: {pair.chair?.display_name || pair.chair?.id || "N/A"}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <div className="text-xs text-muted-foreground truncate" title={pair.chair?.deviceId}>
+                          {pair.chair?.deviceId}
+                        </div>
+                        {pair.chair?.deviceId && (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                            onClick={() =>
+                              handleCopy(pair.chair?.deviceId || "", "Chair Device ID", `chair-${pair.id}`)
+                            }
+                            title="Copy Chair Device ID"
+                          >
+                            {copiedId === `chair-${pair.id}` ? (
+                              <Check className="w-4 h-4 text-green-500" />
+                            ) : (
+                              <Copy className="w-4 h-4" />
+                            )}
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>

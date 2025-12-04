@@ -8,15 +8,15 @@ module.exports = (sequelize, DataTypes) => {
         defaultValue: DataTypes.UUIDV4,
       },
       pair_name: {
-        type: DataTypes.STRING(64),
+        type: DataTypes.STRING(255),
         allowNull: false,
       },
       vr_device_id: {
-        type: DataTypes.STRING(128),
+        type: DataTypes.STRING(255),
         allowNull: false,
       },
       chair_device_id: {
-        type: DataTypes.STRING(128),
+        type: DataTypes.STRING(255),
         allowNull: false,
       },
       is_active: {

@@ -173,7 +173,9 @@ export default function IndividualSessionController({
         // If no participants found and we have retries left, retry after a delay
         // This handles race conditions where the participant might not be committed yet
         if (parts.length === 0 && retryCount < maxRetries) {
-          console.log(`[ControllerStep] No participants found for session ${sid}, retrying (${retryCount + 1}/${maxRetries})...`);
+          console.log(
+            `[ControllerStep] No participants found for session ${sid}, retrying (${retryCount + 1}/${maxRetries})...`,
+          );
           retryTimeout = setTimeout(() => {
             if (isMounted) {
               void load(retryCount + 1);
@@ -463,8 +465,12 @@ export default function IndividualSessionController({
                       <div className="relative">
                         {sessionOfflineDevices?.includes(p.vrId) || sessionOfflineDevices?.includes(p.chairId) ? (
                           <div className="w-full aspect-video bg-red-500/50 flex items-center justify-center text-white absolute top-0 left-0 z-10 font-bold text-2xl text-shadow text-pretty">
-                            {sessionOfflineDevices?.includes(p.vrId) ? `${p.vrId} Device Offline` : null}
-                            {sessionOfflineDevices?.includes(p.chairId) ? `${p.chairId} Device Offline` : null}
+                            {sessionOfflineDevices?.includes(p.vrId)
+                              ? `${p.vrId.slice(0, 5)}... Device Offline `
+                              : null}
+                            {sessionOfflineDevices?.includes(p.chairId)
+                              ? `${p.chairId.slice(0, 5)}... Device Offline`
+                              : null}
                           </div>
                         ) : (
                           <></>
@@ -543,13 +549,13 @@ export default function IndividualSessionController({
                       </div>
                       <div className="p-3 flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
-                          <div className="flex items-center gap-2">
-                            <Headset className="w-4 h-4 text-purple-400" />
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <Headset className="w-4 h-4 text-purple-400 flex-shrink-0" />
                             <span className="text-xs text-white font-medium truncate" title={p.vrId}>
-                              {p.vrId}
+                              {p.vrId.slice(0, 5)}...
                             </span>
                             <span
-                              className={`rounded-full  ${
+                              className={`rounded-full flex-shrink-0 ${
                                 vrOnline
                                   ? "text-emerald-500 bg-emerald-500 animate-pulse"
                                   : "text-red-500 bg-red-500 animate-ping"
@@ -559,13 +565,13 @@ export default function IndividualSessionController({
                             </span>
                           </div>
 
-                          <div className="flex items-center gap-2">
-                            <Armchair className="w-4 h-4 text-blue-400" />
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <Armchair className="w-4 h-4 text-blue-400 flex-shrink-0" />
                             <span className="text-xs text-white font-medium truncate" title={p.chairId}>
-                              {p.chairId}
+                              {p.chairId.slice(0, 5)}...
                             </span>
                             <span
-                              className={`rounded-full ${
+                              className={`rounded-full flex-shrink-0 ${
                                 chairOnline
                                   ? "text-emerald-500 bg-emerald-500 animate-pulse"
                                   : "text-red-500 bg-red-500 animate-ping"
