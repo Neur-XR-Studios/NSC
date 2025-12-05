@@ -70,19 +70,19 @@ interface SessionsEnvelope {
 
 export default function DeviceControlPanel() {
   // Connection form state
-  // Use explicit backend URL for bridge (Socket.IO). Default to localhost:8001 during dev.
+  // Use explicit backend URL for bridge (Socket.IO). Default to window.location.hostname during runtime.
   const backendUrl =
     (import.meta.env.VITE_BACKEND_URL as string) ||
     (typeof window !== "undefined"
       ? `${window.location.protocol}//${window.location.hostname}:8001`
-      : "http://192.168.0.106:8001");
+      : "http://localhost:8001");
   const envUrl = import.meta.env.VITE_MQTT_WS_URL as string;
   const mqttWsUrl =
     (envUrl && !envUrl.includes("localhost"))
       ? envUrl
       : (typeof window !== "undefined"
         ? `ws://${window.location.hostname}:9001`
-        : "ws://192.168.0.106:9001");
+        : "ws://localhost:9001");
   const [forceBridge] = useState<boolean>(true);
   const [mqttUrl] = useState<string>(forceBridge ? backendUrl : mqttWsUrl);
   const [clientId] = useState<string>(`admin-${Math.random().toString(36).slice(2, 8).toUpperCase()}`);

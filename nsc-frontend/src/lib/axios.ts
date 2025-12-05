@@ -27,7 +27,7 @@ function setAuthHeader(config: AxiosRequestConfig, token: string) {
 }
 
 const instance = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || "http://192.168.0.106:8001/api",
+  baseURL: import.meta.env.VITE_API_URL || (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:8001/api` : "http://localhost:8001/api"),
   timeout: 300000, // 5 minutes - allow time for large file uploads
   headers: {
     Accept: "application/json",
@@ -83,7 +83,7 @@ instance.interceptors.request.use(
         console.log('[Axios Interceptor] Refresh token:', refreshToken.substring(0, 20) + '...');
         try {
           const res = await axios.post(
-            `${import.meta.env.VITE_API_URL || "http://192.168.0.106:8001/api"
+            `${import.meta.env.VITE_API_URL || (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:8001/api` : "http://localhost:8001/api")
             }/auth/refresh-token`,
             { refresh_token: refreshToken },
             { withCredentials: true }
