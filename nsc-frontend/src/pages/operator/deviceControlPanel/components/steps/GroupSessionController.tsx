@@ -122,8 +122,8 @@ export default function GroupSessionController({
       (Array.isArray(activePair?.journeyId)
         ? activePair?.journeyId
         : activePair?.journeyId
-        ? [activePair?.journeyId]
-        : []) as number[],
+          ? [activePair?.journeyId]
+          : []) as number[],
     [activePair?.journeyId],
   );
 
@@ -270,8 +270,8 @@ export default function GroupSessionController({
         Array.isArray(activePair?.journeyId)
           ? activePair?.journeyId
           : activePair?.journeyId
-          ? [activePair?.journeyId]
-          : []
+            ? [activePair?.journeyId]
+            : []
       ) as number[];
       sessionPairs.forEach((sp) => {
         const key = `${sp.vrId}-${sp.chairId}`;
@@ -347,14 +347,18 @@ export default function GroupSessionController({
                         onClick={() => {
                           if (!activePair) return;
                           manualPausedRef.current = false;
+                          // Get current position from seek values
+                          const currentMs = Number.isFinite(seekValues[activePair.sessionId])
+                            ? (seekValues[activePair.sessionId] as number)
+                            : 0;
                           sessionPairs.forEach((sp) => {
                             const key = `${sp.vrId}-${sp.chairId}`;
                             playerRefs.current[key]?.play?.();
                           });
                           setIsSessionPlaying(true);
                           const currentJourney = journeyCards[currentJourneyIdx];
-                          console.log("Play", activePair.sessionId, "play", 0, currentJourney?.jid);
-                          sendCmd(activePair.sessionId, "play", 0, currentJourney?.jid);
+                          console.log("Play", activePair.sessionId, "play", currentMs, currentJourney?.jid);
+                          sendCmd(activePair.sessionId, "play", currentMs, currentJourney?.jid);
                         }}
                         className="inline-flex items-center justify-center rounded bg-white/10 hover:bg-white/20 text-white"
                       >
@@ -401,19 +405,13 @@ export default function GroupSessionController({
                         }}
                         onMouseDown={() => {
                           setDragging(true);
-                          if (isPlaying && activePair) {
-                            pausedOnDragRef.current = true;
-                            console.log("Pause", activePair.sessionId, "pause");
-                            sendCmd(activePair.sessionId, "pause");
-                          }
+                          // Track if playing to potentially resume after seek, but don't send pause
+                          pausedOnDragRef.current = isSessionPlaying;
                         }}
                         onTouchStart={() => {
                           setDragging(true);
-                          if (isPlaying && activePair) {
-                            pausedOnDragRef.current = true;
-                            console.log("Pause", activePair.sessionId, "pause");
-                            sendCmd(activePair.sessionId, "pause");
-                          }
+                          // Track if playing to potentially resume after seek, but don't send pause
+                          pausedOnDragRef.current = isSessionPlaying;
                         }}
                         onMouseUp={(ev) => {
                           setDragging(false);
@@ -424,13 +422,9 @@ export default function GroupSessionController({
                               playerRefs.current[key]?.seekTo?.(val);
                             });
                             const currentJourney = journeyCards[currentJourneyIdx];
+                            // Only send seek command - devices handle resume automatically
                             console.log("Seek", activePair.sessionId, "seek", val, currentJourney?.jid);
                             sendCmd(activePair.sessionId, "seek", val, currentJourney?.jid);
-                            if (isSessionPlaying) {
-                              console.log("Play", activePair.sessionId, "play", val, currentJourney?.jid);
-                              sendCmd(activePair.sessionId, "play", val, currentJourney?.jid);
-                              setIsSessionPlaying(true);
-                            }
                           }
                           pausedOnDragRef.current = false;
                         }}
@@ -443,13 +437,9 @@ export default function GroupSessionController({
                               playerRefs.current[key]?.seekTo?.(val);
                             });
                             const currentJourney = journeyCards[currentJourneyIdx];
+                            // Only send seek command - devices handle resume automatically
                             console.log("Seek", activePair.sessionId, "seek", val, currentJourney?.jid);
                             sendCmd(activePair.sessionId, "seek", val, currentJourney?.jid);
-                            if (isSessionPlaying) {
-                              console.log("Play", activePair.sessionId, "play", val, currentJourney?.jid);
-                              sendCmd(activePair.sessionId, "play", val, currentJourney?.jid);
-                              setIsSessionPlaying(true);
-                            }
                           }
                           pausedOnDragRef.current = false;
                         }}
@@ -564,8 +554,8 @@ export default function GroupSessionController({
                     idx < currentJourneyIdx
                       ? "px-2 py-1 rounded bg-emerald-700 text-white text-xs"
                       : idx === currentJourneyIdx
-                      ? "px-2 py-1 rounded bg-cyan-700 text-white text-xs"
-                      : "px-2 py-1 rounded bg-slate-700 text-white text-xs"
+                        ? "px-2 py-1 rounded bg-cyan-700 text-white text-xs"
+                        : "px-2 py-1 rounded bg-slate-700 text-white text-xs"
                   }
                   title={String(jc.jid)}
                 >
@@ -598,7 +588,7 @@ export default function GroupSessionController({
                     setIsSessionPlaying(false);
                     setCurrentJourneyIdx(nextIdx);
                     setSeekValues((prev) => ({ ...prev, [activePair.sessionId]: 0 }));
-                    commandSession(activePair.sessionId, "select_journey", { journeyId: target.jid }).catch(() => {});
+                    commandSession(activePair.sessionId, "select_journey", { journeyId: target.jid }).catch(() => { });
                   }
                 }
               }}
@@ -698,11 +688,10 @@ export default function GroupSessionController({
                               {p.vrId.slice(0, 5)}...
                             </span>
                             <span
-                              className={`rounded-full ${
-                                vrOnline
+                              className={`rounded-full ${vrOnline
                                   ? "text-emerald-500 bg-emerald-500 animate-pulse"
                                   : "text-red-500 bg-red-500 animate-ping"
-                              }`}
+                                }`}
                             >
                               <Dot className="w-4 h-4" />
                             </span>
@@ -714,11 +703,10 @@ export default function GroupSessionController({
                               {p.chairId.slice(0, 5)}...
                             </span>
                             <span
-                              className={`rounded-full ${
-                                chairOnline
+                              className={`rounded-full ${chairOnline
                                   ? "text-emerald-500 bg-emerald-500 animate-pulse"
                                   : "text-red-500 bg-red-500 animate-ping"
-                              }`}
+                                }`}
                             >
                               <Dot className="w-4 h-4" />
                             </span>

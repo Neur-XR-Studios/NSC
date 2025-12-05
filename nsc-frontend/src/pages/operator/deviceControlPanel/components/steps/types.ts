@@ -38,6 +38,8 @@ export interface BaseControllerProps {
     pair: { vrId: string; chairId: string },
     type: "play" | "pause" | "seek" | "stop",
     positionMs?: number,
+    sessionId?: string,
+    journeyId?: number,
   ) => void;
   sessionOfflineDevices?: string[];
 }

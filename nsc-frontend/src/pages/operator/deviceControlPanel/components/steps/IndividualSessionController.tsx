@@ -60,8 +60,8 @@ export default function IndividualSessionController({
       (Array.isArray(activePair?.journeyId)
         ? activePair?.journeyId
         : activePair?.journeyId
-        ? [activePair?.journeyId]
-        : []) as number[],
+          ? [activePair?.journeyId]
+          : []) as number[],
     [activePair?.journeyId],
   );
   const journeyCards = useMemo(
@@ -258,13 +258,13 @@ export default function IndividualSessionController({
         if (offlinePair) {
           const pairKey = `${offlinePair.vrId}-${offlinePair.chairId}`;
           const devicePositionMs = playerRefs.current[pairKey]?.getCurrentTimeMs() || 0;
-          sendParticipantCmd({ vrId: offlinePair.vrId, chairId: offlinePair.chairId }, "pause", devicePositionMs);
+          sendParticipantCmd({ vrId: offlinePair.vrId, chairId: offlinePair.chairId }, "pause", devicePositionMs, activePair?.sessionId);
           const k = `${offlinePair.vrId}-${offlinePair.chairId}`;
           playerRefs.current[k]?.pause?.();
         }
       });
     }
-  }, [sessionOfflineDevices, sessionPairs, sendParticipantCmd]);
+  }, [sessionOfflineDevices, sessionPairs, sendParticipantCmd, activePair?.sessionId]);
 
   // Sync device-selected journey and language to UI state for Individual sessions
   useEffect(() => {
@@ -439,8 +439,8 @@ export default function IndividualSessionController({
                     typeof vrInfo?.positionMs === "number" && isFinite(vrInfo.positionMs)
                       ? vrInfo.positionMs
                       : typeof chairInfo?.positionMs === "number" && isFinite(chairInfo.positionMs)
-                      ? chairInfo.positionMs
-                      : undefined;
+                        ? chairInfo.positionMs
+                        : undefined;
                   const currentJid =
                     deviceJourneyId ??
                     selectedJourneyByPair[key] ??
@@ -516,22 +516,22 @@ export default function IndividualSessionController({
                                   typeof devicePositionMs === "number" && isFinite(devicePositionMs)
                                     ? devicePositionMs
                                     : playerRefs.current[key]?.getCurrentTimeMs() || 0;
-                                console.log("Play", { vrId: p.vrId, chairId: p.chairId }, "play", currentMs);
-                                sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "play", currentMs);
+                                console.log("Play", { vrId: p.vrId, chairId: p.chairId }, "play", currentMs, activePair?.sessionId, currentJid);
+                                sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "play", currentMs, activePair?.sessionId, currentJid ? Number(currentJid) : undefined);
                               } else {
                                 // Prefer device-reported position for accuracy in Individual mode
                                 const currentMs =
                                   typeof devicePositionMs === "number" && isFinite(devicePositionMs)
                                     ? devicePositionMs
                                     : playerRefs.current[key]?.getCurrentTimeMs() || 0;
-                                console.log("Pause", { vrId: p.vrId, chairId: p.chairId }, "pause", currentMs);
-                                sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "pause", currentMs);
+                                console.log("Pause", { vrId: p.vrId, chairId: p.chairId }, "pause", currentMs, activePair?.sessionId, currentJid);
+                                sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "pause", currentMs, activePair?.sessionId, currentJid ? Number(currentJid) : undefined);
                               }
                             }}
                             onSeekEnd={(ms: number) => {
                               if (!sendParticipantCmd) return;
-                              console.log("Seek", { vrId: p.vrId, chairId: p.chairId }, "seek", ms);
-                              sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "seek", ms);
+                              console.log("Seek", { vrId: p.vrId, chairId: p.chairId }, "seek", ms, activePair?.sessionId, currentJid);
+                              sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "seek", ms, activePair?.sessionId, currentJid ? Number(currentJid) : undefined);
                             }}
                             onTimeUpdateMs={(ms: number) => {
                               if (!activePair?.sessionId) return;
@@ -555,11 +555,10 @@ export default function IndividualSessionController({
                               {p.vrId.slice(0, 5)}...
                             </span>
                             <span
-                              className={`rounded-full flex-shrink-0 ${
-                                vrOnline
-                                  ? "text-emerald-500 bg-emerald-500 animate-pulse"
-                                  : "text-red-500 bg-red-500 animate-ping"
-                              }`}
+                              className={`rounded-full flex-shrink-0 ${vrOnline
+                                ? "text-emerald-500 bg-emerald-500 animate-pulse"
+                                : "text-red-500 bg-red-500 animate-ping"
+                                }`}
                             >
                               <Dot className="w-4 h-4" />
                             </span>
@@ -571,11 +570,10 @@ export default function IndividualSessionController({
                               {p.chairId.slice(0, 5)}...
                             </span>
                             <span
-                              className={`rounded-full flex-shrink-0 ${
-                                chairOnline
-                                  ? "text-emerald-500 bg-emerald-500 animate-pulse"
-                                  : "text-red-500 bg-red-500 animate-ping"
-                              }`}
+                              className={`rounded-full flex-shrink-0 ${chairOnline
+                                ? "text-emerald-500 bg-emerald-500 animate-pulse"
+                                : "text-red-500 bg-red-500 animate-ping"
+                                }`}
                             >
                               <Dot className="w-4 h-4" />
                             </span>
@@ -761,11 +759,10 @@ export default function IndividualSessionController({
                                   return (
                                     <div
                                       key={`${key}-jc-${jc.jid}`}
-                                      className={`flex-shrink-0 group relative rounded-lg overflow-hidden cursor-pointer transition-all border-2 ${
-                                        isSelected
-                                          ? "border-cyan-500 shadow-lg shadow-cyan-500/30"
-                                          : "border-slate-700 hover:border-slate-600"
-                                      }`}
+                                      className={`flex-shrink-0 group relative rounded-lg overflow-hidden cursor-pointer transition-all border-2 ${isSelected
+                                        ? "border-cyan-500 shadow-lg shadow-cyan-500/30"
+                                        : "border-slate-700 hover:border-slate-600"
+                                        }`}
                                       onClick={() => {
                                         console.log("Selected journey:", jc);
                                         const pid = participantIdByPair[key];
@@ -1054,11 +1051,10 @@ export default function IndividualSessionController({
                             key={d.id}
                             type="button"
                             onClick={() => setSelectedVrId(d.id)}
-                            className={`w-full text-left border rounded-lg p-2 transition-all ${
-                              selected
-                                ? "border-purple-500 bg-purple-500/10 ring-2 ring-purple-500/20"
-                                : "border-slate-700 bg-slate-800/40 hover:bg-slate-800 hover:border-slate-600"
-                            }`}
+                            className={`w-full text-left border rounded-lg p-2 transition-all ${selected
+                              ? "border-purple-500 bg-purple-500/10 ring-2 ring-purple-500/20"
+                              : "border-slate-700 bg-slate-800/40 hover:bg-slate-800 hover:border-slate-600"
+                              }`}
                           >
                             <div className="flex items-center justify-between">
                               <div>
@@ -1100,11 +1096,10 @@ export default function IndividualSessionController({
                             key={d.id}
                             type="button"
                             onClick={() => setSelectedChairId(d.id)}
-                            className={`w-full text-left border rounded-lg p-2 transition-all ${
-                              selected
-                                ? "border-cyan-500 bg-cyan-500/10 ring-2 ring-cyan-500/20"
-                                : "border-slate-700 bg-slate-800/40 hover:bg-slate-800 hover:border-slate-600"
-                            }`}
+                            className={`w-full text-left border rounded-lg p-2 transition-all ${selected
+                              ? "border-cyan-500 bg-cyan-500/10 ring-2 ring-cyan-500/20"
+                              : "border-slate-700 bg-slate-800/40 hover:bg-slate-800 hover:border-slate-600"
+                              }`}
                           >
                             <div className="flex items-center justify-between">
                               <div>

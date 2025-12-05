@@ -356,6 +356,7 @@ class SessionService {
             overall_status: 'completed',
             stopped_at: now,
             total_duration_ms: totalDurationMs,
+            last_position_ms: 0,  // Reset position on stop
           });
           break;
 
@@ -747,7 +748,7 @@ class SessionService {
     let payload;
     switch (cmd) {
       case 'start':
-        payload = { cmd: 'start', startAtMs: applyAtMs, durationMs, journeyId };
+        payload = { cmd: 'start', startAtMs: applyAtMs, positionMs, durationMs, journeyId };
         break;
       case 'pause':
         payload = { cmd: 'pause', positionMs, journeyId };
@@ -957,7 +958,7 @@ class SessionService {
     let payload;
     switch (cmd) {
       case 'start':
-        payload = { cmd: 'start', startAtMs: applyAtMs, durationMs, journeyId };
+        payload = { cmd: 'start', startAtMs: applyAtMs, positionMs, durationMs, journeyId };
         break;
       case 'pause':
         payload = { cmd: 'pause', positionMs, journeyId };

@@ -476,11 +476,11 @@ export default function DeviceControlPanel() {
             const next = new Map<string, Device>(map);
             devices.forEach((d) => {
               const existing = next.get(d.deviceId);
-              
+
               // If device already exists, keep its current online status
               // For NEW devices from snapshot, start as OFFLINE - wait for heartbeat/status to mark online
               const onlineStatus = existing ? existing.online : false;
-              
+
               next.set(d.deviceId, {
                 id: d.deviceId,
                 deviceId: d.deviceId,
@@ -503,7 +503,7 @@ export default function DeviceControlPanel() {
           // Check if payload indicates offline (LWT payload is "offline" or contains status: "offline")
           const lwtPayload = p.toLowerCase();
           const isOffline = lwtPayload === "offline" || lwtPayload.includes('"status":"offline"') || lwtPayload.includes('"online":false');
-          
+
           // Only mark offline if LWT indicates offline, not if it's "online" (device clearing its LWT)
           if (isOffline) {
             console.log(`[DeviceControlPanel] LWT received for ${id} - marking offline`);
@@ -578,12 +578,12 @@ export default function DeviceControlPanel() {
                   rawStatus === "stopped"
                   ? "idle"
                   : rawStatus || "idle"; // Default to idle if empty
-            
+
             // Device is online if it's sending status messages (unless explicitly disconnected)
             // Only mark offline if status explicitly says "disconnect" or "disconnected" or "offline"
             const isDisconnectStatus = ["disconnect", "disconnected", "offline"].includes(rawStatus);
             const online = !isDisconnectStatus; // Online unless explicitly disconnected
-            
+
             // Update device type from status payload if provided
             const reportedType = String((data && data.type) || "").toLowerCase();
             let deviceType = cur.type;
@@ -594,7 +594,7 @@ export default function DeviceControlPanel() {
               if (/^vr[_-]?/i.test(id)) deviceType = "vr";
               else if (/^chair[_-]?/i.test(id)) deviceType = "chair";
             }
-            
+
             // Create new object to trigger React re-render
             map.set(id, {
               ...cur,
@@ -614,7 +614,7 @@ export default function DeviceControlPanel() {
           const heartbeatData = JSON.parse(p || "{}") as { type?: string; deviceId?: string };
           renderDevices((map: Map<string, Device>) => {
             const cur: Device = map.get(id) || { id, deviceId: id, type: "unknown", name: id, online: false };
-            
+
             // Update device type from heartbeat payload if provided
             const reportedType = String(heartbeatData?.type || "").toLowerCase();
             let deviceType = cur.type;
@@ -625,7 +625,7 @@ export default function DeviceControlPanel() {
               if (/^vr[_-]?/i.test(id)) deviceType = "vr";
               else if (/^chair[_-]?/i.test(id)) deviceType = "chair";
             }
-            
+
             // Create new object to trigger React re-render
             map.set(id, {
               ...cur,
@@ -651,7 +651,7 @@ export default function DeviceControlPanel() {
           const event = String(data?.event || "").toLowerCase();
           renderDevices((map: Map<string, Device>) => {
             const cur: Device = map.get(id) || { id, deviceId: id, type: "unknown", name: data?.display_name || id, online: false };
-            
+
             // Update device type from event payload if available; otherwise infer from id
             const reportedType = String((data && data.type) || "").toLowerCase();
             let deviceType = cur.type;
@@ -661,7 +661,7 @@ export default function DeviceControlPanel() {
               if (/^vr[_-]?/i.test(id)) deviceType = "vr";
               else if (/^chair[_-]?/i.test(id)) deviceType = "chair";
             }
-            
+
             let status = cur.status;
             let playing = cur.playing;
             if (event === "select_journey" && data?.journeyId != null) {
@@ -673,7 +673,7 @@ export default function DeviceControlPanel() {
               status = "idle";
               playing = false;
             }
-            
+
             // Create new object to trigger React re-render
             map.set(id, {
               ...cur,
@@ -722,7 +722,7 @@ export default function DeviceControlPanel() {
         "devices/+/events",
         "devices/+/lwt", // Last Will Testament for offline detection
       ];
-      
+
       topics.forEach((topic) => {
         realtime.subscribe(topic, 1);
         log(`Subscribed to ${topic}`);
@@ -825,10 +825,18 @@ export default function DeviceControlPanel() {
 
   // Participant-scoped device command (used for Individual flow without participantId)
   const sendParticipantCmd = useCallback(
-    (pair: { vrId: string; chairId: string }, type: "play" | "pause" | "seek" | "stop", positionMs?: number) => {
+    (
+      pair: { vrId: string; chairId: string },
+      type: "play" | "pause" | "seek" | "stop",
+      positionMs?: number,
+      sessionId?: string,
+      journeyId?: number
+    ) => {
       const payload = {
         positionMs: Number(positionMs || 0),
         timestamp: new Date().toISOString(),
+        ...(sessionId && { sessionId }),
+        ...(journeyId && { journeyId }),
       };
       // Look up hardware deviceId from device list (devices listen to their hardware ID, not database ID)
       const vrDevice = devicesList.find((d) => d.id === pair.vrId);
