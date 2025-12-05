@@ -22,22 +22,27 @@ const corsOptions = {
   origin: (origin, callback) => {
     // Allow non-browser or same-origin requests (no origin)
     if (!origin) return callback(null, true);
-    
-    // In development, allow all origins for testing
-    if (process.env.NODE_ENV === 'development') {
-      return callback(null, true);
-    }
-    
+
+    // If CORS_ORIGIN is not configured (empty), allow ALL origins
+    // This is useful for LAN access where the IP may vary
     if (allowedOrigins.length === 0) {
-      // If not configured, default to reflecting the request origin (use cautiously in dev)
       return callback(null, true);
     }
+
+    // Otherwise check against the configured allowed origins
     if (allowedOrigins.includes(origin)) return callback(null, true);
+
+    // Also allow any origin from the same IP as PUBLIC_HOST
+    const publicHost = process.env.PUBLIC_HOST || '';
+    if (publicHost && origin.includes(publicHost)) {
+      return callback(null, true);
+    }
+
     return callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
   methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
   exposedHeaders: ['Content-Length'],
 };
 
@@ -82,17 +87,17 @@ const runMigrations = async () => {
     const path = require('path');
     const util = require('util');
     const execPromise = util.promisify(exec);
-    
+
     console.log('[DB] Running pending migrations...');
-    
+
     const { stdout, stderr } = await execPromise('npx sequelize-cli db:migrate', {
       cwd: path.resolve(__dirname, '..'),
       env: { ...process.env }
     });
-    
+
     if (stdout) console.log('[DB] Migration output:', stdout);
     if (stderr && !stderr.includes('No migrations')) console.warn('[DB] Migration warnings:', stderr);
-    
+
     console.log('[DB] Migrations completed successfully');
   } catch (error) {
     // Migration errors are non-fatal - the app can still run
@@ -107,19 +112,19 @@ const runMigrations = async () => {
 const applySchemaFixes = async () => {
   try {
     console.log('[DB] Applying schema fixes...');
-    
+
     // Fix device ID column sizes in session_participants
     await db.sequelize.query(`
       ALTER TABLE session_participants 
       MODIFY COLUMN vr_device_id VARCHAR(128),
       MODIFY COLUMN chair_device_id VARCHAR(128)
-    `).catch(() => {});
+    `).catch(() => { });
 
     // Fix device ID column size in session_logs
     await db.sequelize.query(`
       ALTER TABLE session_logs 
       MODIFY COLUMN vr_device_id VARCHAR(128)
-    `).catch(() => {});
+    `).catch(() => { });
 
     console.log('[DB] Schema fixes applied');
   } catch (e) {
@@ -133,18 +138,18 @@ const applySchemaFixes = async () => {
   try {
     // Run migrations first
     await runMigrations();
-    
+
     // Sync models (creates tables if missing, updates columns)
     await db.sequelize.sync({ alter: true });
     console.log('[DB] Database synced successfully');
-    
+
     // Apply any schema fixes that sync might miss
     await applySchemaFixes();
-    
+
     // Ensure admin user exists
     const userService = new UserService();
     await userService.ensureAdminExists();
-    
+
     console.log('[DB] Database initialization complete');
   } catch (e) {
     console.error('[DB] Database initialization error:', e);
