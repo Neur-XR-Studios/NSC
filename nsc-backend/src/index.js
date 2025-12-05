@@ -22,7 +22,7 @@ global.io = io;
 require('./config/rootSocket')(io);
 
 if (!process.env.BASE_URL) {
-    const host = process.env.PUBLIC_HOST || 'localhost';
+    const host = process.env.PUBLIC_HOST || '192.168.0.106';
     const port = process.env.BACKEND_PORT || process.env.PORT || 5000;
     process.env.BASE_URL = `http://${host}:${port}`;
 }

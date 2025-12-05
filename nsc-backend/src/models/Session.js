@@ -7,6 +7,11 @@ module.exports = (sequelize, DataTypes) => {
         primaryKey: true,
         defaultValue: DataTypes.UUIDV4,
       },
+      operator_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        comment: "The operator/user who created this session",
+      },
       vr_device_id: {
         type: DataTypes.STRING(128),
         allowNull: true,
@@ -104,6 +109,7 @@ module.exports = (sequelize, DataTypes) => {
   );
 
   Session.associate = (models) => {
+    Session.belongsTo(models.user, { foreignKey: "operator_id", as: "operator" });
     Session.belongsTo(models.VRDevice, { foreignKey: "vr_device_id", as: "vr" });
     Session.belongsTo(models.ChairDevice, { foreignKey: "chair_device_id", as: "chair" });
     Session.hasMany(models.SessionLog, { foreignKey: "session_id", as: "logs" });

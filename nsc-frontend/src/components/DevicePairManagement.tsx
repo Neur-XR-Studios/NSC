@@ -88,7 +88,7 @@ export default function DevicePairManagement() {
   useEffect(() => {
     const connectMqtt = async () => {
       try {
-        const wsHost = window.location.hostname || "localhost";
+        const wsHost = window.location.hostname || "192.168.0.106";
 
         // Check if already connected
         if (!realtime.isConnected) {

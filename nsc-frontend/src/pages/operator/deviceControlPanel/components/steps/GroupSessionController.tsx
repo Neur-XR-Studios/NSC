@@ -370,12 +370,15 @@ export default function GroupSessionController({
                         onClick={() => {
                           if (!activePair) return;
                           manualPausedRef.current = true;
-                          let currentMs = Number.isFinite(seekValues[activePair.sessionId])
-                            ? (seekValues[activePair.sessionId] as number)
-                            : 0;
+                          // Priority: 1) Local player position (most accurate - what admin sees)
+                          //           2) seekValues (fallback)
+                          // NOTE: Do NOT use device-reported position - it's stale when paused
                           const anyRef = Object.values(playerRefs.current).find(Boolean);
+                          let currentMs = 0;
                           if (anyRef && typeof anyRef.getCurrentTimeMs === "function") {
                             currentMs = anyRef.getCurrentTimeMs();
+                          } else if (Number.isFinite(seekValues[activePair.sessionId])) {
+                            currentMs = seekValues[activePair.sessionId] as number;
                           }
                           sessionPairs.forEach((sp) => {
                             const key = `${sp.vrId}-${sp.chairId}`;
@@ -584,11 +587,13 @@ export default function GroupSessionController({
                       const key = `${sp.vrId}-${sp.chairId}`;
                       playerRefs.current[key]?.pause?.();
                       playerRefs.current[key]?.seekTo?.(0);
+                      // Also reset seekValues for each participant key
+                      setSeekValues((prev) => ({ ...prev, [key]: 0 }));
                     });
                     setIsSessionPlaying(false);
                     setCurrentJourneyIdx(nextIdx);
                     setSeekValues((prev) => ({ ...prev, [activePair.sessionId]: 0 }));
-                    commandSession(activePair.sessionId, "select_journey", { journeyId: target.jid }).catch(() => { });
+                    commandSession(activePair.sessionId, "select_journey", { journeyId: target.jid, positionMs: 0 }).catch(() => { });
                   }
                 }
               }}
@@ -602,7 +607,15 @@ export default function GroupSessionController({
               onClick={() => {
                 if (!activePair) return;
                 const currentJourney = journeyCards[currentJourneyIdx];
-                commandSession(activePair.sessionId, "sync", { journeyId: currentJourney?.jid }).catch((e) => {
+                // Get current position from the first available player ref
+                const anyRef = Object.values(playerRefs.current).find(Boolean);
+                let currentMs = 0;
+                if (anyRef && typeof anyRef.getCurrentTimeMs === "function") {
+                  currentMs = anyRef.getCurrentTimeMs();
+                } else if (Number.isFinite(seekValues[activePair.sessionId])) {
+                  currentMs = seekValues[activePair.sessionId] as number;
+                }
+                commandSession(activePair.sessionId, "sync", { journeyId: currentJourney?.jid, positionMs: currentMs }).catch((e) => {
                   void e;
                 });
               }}
@@ -689,8 +702,8 @@ export default function GroupSessionController({
                             </span>
                             <span
                               className={`rounded-full ${vrOnline
-                                  ? "text-emerald-500 bg-emerald-500 animate-pulse"
-                                  : "text-red-500 bg-red-500 animate-ping"
+                                ? "text-emerald-500 bg-emerald-500 animate-pulse"
+                                : "text-red-500 bg-red-500 animate-ping"
                                 }`}
                             >
                               <Dot className="w-4 h-4" />
@@ -704,8 +717,8 @@ export default function GroupSessionController({
                             </span>
                             <span
                               className={`rounded-full ${chairOnline
-                                  ? "text-emerald-500 bg-emerald-500 animate-pulse"
-                                  : "text-red-500 bg-red-500 animate-ping"
+                                ? "text-emerald-500 bg-emerald-500 animate-pulse"
+                                : "text-red-500 bg-red-500 animate-ping"
                                 }`}
                             >
                               <Dot className="w-4 h-4" />

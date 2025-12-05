@@ -32,6 +32,7 @@ import { SessionFeedbackModal } from "@/components/SessionFeedbackModal";
 export default function IndividualSessionController({
   activePair,
   journeys,
+  seekValues,
   setSeekValues,
   sendCmd,
   onNewSession,
@@ -510,20 +511,22 @@ export default function IndividualSessionController({
                             }
                             ontogglePlay={(playing: boolean) => {
                               if (!sendParticipantCmd) return;
+                              // Priority: 1) Local player position (most accurate - what admin sees)
+                              //           2) seekValues (updated by onTimeUpdateMs)
+                              // NOTE: Do NOT use devicePositionMs - it's stale data from VR that doesn't update while paused
+                              const playerPosition = playerRefs.current[key]?.getCurrentTimeMs();
+                              const seekValPosition = seekKey && typeof seekValues[seekKey] === "number" ? seekValues[seekKey] : undefined;
+                              const currentMs =
+                                typeof playerPosition === "number" && isFinite(playerPosition) && playerPosition >= 0
+                                  ? playerPosition
+                                  : typeof seekValPosition === "number" && isFinite(seekValPosition) && seekValPosition >= 0
+                                    ? seekValPosition
+                                    : 0;
+
                               if (playing) {
-                                // Include current position to ensure resume on devices that require it
-                                const currentMs =
-                                  typeof devicePositionMs === "number" && isFinite(devicePositionMs)
-                                    ? devicePositionMs
-                                    : playerRefs.current[key]?.getCurrentTimeMs() || 0;
                                 console.log("Play", { vrId: p.vrId, chairId: p.chairId }, "play", currentMs, activePair?.sessionId, currentJid);
                                 sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "play", currentMs, activePair?.sessionId, currentJid ? Number(currentJid) : undefined);
                               } else {
-                                // Prefer device-reported position for accuracy in Individual mode
-                                const currentMs =
-                                  typeof devicePositionMs === "number" && isFinite(devicePositionMs)
-                                    ? devicePositionMs
-                                    : playerRefs.current[key]?.getCurrentTimeMs() || 0;
                                 console.log("Pause", { vrId: p.vrId, chairId: p.chairId }, "pause", currentMs, activePair?.sessionId, currentJid);
                                 sendParticipantCmd({ vrId: p.vrId, chairId: p.chairId }, "pause", currentMs, activePair?.sessionId, currentJid ? Number(currentJid) : undefined);
                               }

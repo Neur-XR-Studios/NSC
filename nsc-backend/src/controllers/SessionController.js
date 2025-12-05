@@ -9,7 +9,9 @@ class SessionController {
 
   start = async (req, res) => {
     try {
-      const result = await this.service.startSession(req.body);
+      // Pass operator ID from authenticated user for session isolation
+      const operatorId = req.user?.id || null;
+      const result = await this.service.startSession({ ...req.body, operatorId });
       return res.status(result.statusCode).send(result.response);
     } catch (e) {
       logger.error(e);
@@ -75,10 +77,13 @@ class SessionController {
   };
 
   // Retrieve sessions with optional overall_status filter (default on_going)
+  // Sessions are filtered by operator_id to ensure isolation between operators
   list = async (req, res) => {
     try {
       const { page, limit, status = 'on_going' } = req.query;
-      const result = await this.service.listSessions({ page, limit, status });
+      // Pass operator ID from authenticated user for session isolation
+      const operatorId = req.user?.id || null;
+      const result = await this.service.listSessions({ page, limit, status, operatorId });
 
       // Add file URLs similar to JourneyController
       if (result && result.response && result.response.status && result.response.data) {
@@ -101,7 +106,9 @@ class SessionController {
   // Create a GROUP session with participants
   createGroup = async (req, res) => {
     try {
-      const result = await this.service.createGroupSession(req.body);
+      // Pass operator ID from authenticated user for session isolation
+      const operatorId = req.user?.id || null;
+      const result = await this.service.createGroupSession({ ...req.body, operatorId });
       return res.status(result.statusCode).send(result.response);
     } catch (e) {
       logger.error(e);
@@ -228,10 +235,13 @@ class SessionController {
   };
 
   // Get all active sessions (for session persistence)
+  // Sessions are filtered by operator_id to ensure isolation between operators
   getActiveSessions = async (req, res) => {
     try {
       const { sessionType } = req.query;
-      const result = await this.service.getActiveSessions(sessionType);
+      // Pass operator ID from authenticated user for session isolation
+      const operatorId = req.user?.id || null;
+      const result = await this.service.getActiveSessions(sessionType, operatorId);
       return res.status(result.statusCode).send(result.response);
     } catch (e) {
       logger.error(e);
@@ -244,6 +254,67 @@ class SessionController {
     try {
       const sessionId = req.params.id;
       const result = await this.service.unpairSession(sessionId);
+      return res.status(result.statusCode).send(result.response);
+    } catch (e) {
+      logger.error(e);
+      return res.status(httpStatus.BAD_GATEWAY).send({ status: false, message: e.message });
+    }
+  };
+
+  // Get devices currently in active sessions (for showing "in session" status)
+  // Excludes current operator's sessions so they can manage their own devices
+  getDevicesInSession = async (req, res) => {
+    try {
+      const operatorId = req.user?.id || null;
+      const result = await this.service.getDevicesInActiveSessions(operatorId);
+      return res.status(httpStatus.OK).send({ status: true, data: result });
+    } catch (e) {
+      logger.error(e);
+      return res.status(httpStatus.BAD_GATEWAY).send({ status: false, message: e.message });
+    }
+  };
+
+  // ============ DEVICE-FACING ENDPOINTS (No Auth Required) ============
+  // These endpoints are for VR/Chair devices that don't have user authentication
+
+  // Get session by ID - for VR devices (no auth, no operator filtering)
+  getByIdForDevice = async (req, res) => {
+    try {
+      const sessionId = req.params.id;
+      const result = await this.service.getById(sessionId);
+
+      // Add file URLs similar to JourneyController
+      if (result && result.response && result.response.status && result.response.data) {
+        const data = result.response.data;
+        this.addFileUrls(data, req);
+      }
+
+      return res.status(result.statusCode).send(result.response);
+    } catch (e) {
+      logger.error(e);
+      return res.status(httpStatus.BAD_GATEWAY).send({ status: false, message: e.message });
+    }
+  };
+
+  // List sessions - for VR devices (no auth, no operator filtering)
+  // Returns all active sessions without operator isolation
+  listForDevice = async (req, res) => {
+    try {
+      const { page, limit, status = 'on_going' } = req.query;
+      // No operator filtering for device endpoints
+      const result = await this.service.listSessions({ page, limit, status, operatorId: null });
+
+      // Add file URLs similar to JourneyController
+      if (result && result.response && result.response.status && result.response.data) {
+        const data = result.response.data;
+        if (Array.isArray(data.data)) {
+          data.data = data.data.map(session => {
+            this.addFileUrls(session, req);
+            return session;
+          });
+        }
+      }
+
       return res.status(result.statusCode).send(result.response);
     } catch (e) {
       logger.error(e);

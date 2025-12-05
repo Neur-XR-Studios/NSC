@@ -12,9 +12,11 @@ import {
   Wifi,
   WifiOff,
   PlugZap,
+  Play,
 } from "lucide-react";
 import type { SessionType } from "@/lib/sessions";
 import { getDevicePairs, type DevicePair } from "@/lib/devicePairs";
+import { getDevicesInSession } from "@/lib/sessions";
 import { CreatePairingCodeModal } from "@/components/modals/CreatePairingCodeModal";
 import { useToast } from "@/hooks/use-toast";
 import { customCss } from "@/lib/customCss";
@@ -79,6 +81,12 @@ export default function DeviceSelectionStep({
   const [loading, setLoading] = useState(false);
   const [pairingModalOpen, setPairingModalOpen] = useState(false);
   const [repairTargetId, setRepairTargetId] = useState<string | null>(null);
+
+  // Track devices that are currently in active sessions (by other operators)
+  const [devicesInSession, setDevicesInSession] = useState<{ vrDeviceIds: Set<string>; chairDeviceIds: Set<string> }>({
+    vrDeviceIds: new Set(),
+    chairDeviceIds: new Set(),
+  });
 
   // STABLE online status tracking - only updates when status ACTUALLY changes
   const [onlineDevices, setOnlineDevices] = useState<Set<string>>(new Set());
@@ -151,10 +159,48 @@ export default function DeviceSelectionStep({
     }
   };
 
+  // Load devices in session (by other operators) to show "In Session" status
+  const loadDevicesInSession = async () => {
+    try {
+      const result = await getDevicesInSession();
+      setDevicesInSession({
+        vrDeviceIds: new Set(result.vrDeviceIds || []),
+        chairDeviceIds: new Set(result.chairDeviceIds || []),
+      });
+    } catch (error) {
+      console.error("Failed to load devices in session:", error);
+    }
+  };
+
   useEffect(() => {
     void loadDevicePairs();
+    void loadDevicesInSession();
+    // Refresh devices in session periodically (every 10 seconds)
+    const interval = setInterval(() => {
+      void loadDevicesInSession();
+    }, 10000);
+    return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Check if a device is currently in an active session by another operator
+  const isDeviceInSession = useCallback(
+    (deviceId: string, type: "vr" | "chair") => {
+      if (type === "vr") {
+        return devicesInSession.vrDeviceIds.has(deviceId);
+      }
+      return devicesInSession.chairDeviceIds.has(deviceId);
+    },
+    [devicesInSession],
+  );
+
+  // Check if a pair has any device in session
+  const isPairInSession = useCallback(
+    (vrDeviceId: string, chairDeviceId: string) => {
+      return devicesInSession.vrDeviceIds.has(vrDeviceId) || devicesInSession.chairDeviceIds.has(chairDeviceId);
+    },
+    [devicesInSession],
+  );
 
   // Compute enriched pairs with online status - uses STABLE onlineDevices set
   // This only re-computes when onlineDevices actually changes (not on every MQTT message)
@@ -173,24 +219,19 @@ export default function DeviceSelectionStep({
     });
   }, [devicePairs, isDeviceOnline]); // Only depends on stable isDeviceOnline
 
-  // SHOW ALL PAIRS - don't filter by online status to prevent disappearing
-  // The UI will show online/offline indicators but pairs won't disappear
+  // ONLY show pairs where BOTH devices are online
+  // Offline pairs should not appear in the selection list
   const filteredPairs = useMemo(() => {
-    // Always show all pairs - let user see which devices are online/offline
-    // This prevents the frustrating disappearing behavior
-    return enrichedPairsWithStatus;
+    return enrichedPairsWithStatus.filter((pair) => pair.bothOnline);
   }, [enrichedPairsWithStatus]);
 
-  // Toggle pair selection - allow selection even if not both online
-  // User can try to start session, devices may come online
-  const togglePairSelection = (pairId: string, bothOnline: boolean) => {
-    // Allow selection regardless of online status - don't block the user
-    // The session start will handle if devices are actually available
-    if (false && !bothOnline) {
-      // DISABLED - always allow selection
+  // Toggle pair selection - block if pair is in session by another operator
+  const togglePairSelection = (pairId: string, bothOnline: boolean, vrDeviceId: string, chairDeviceId: string) => {
+    // Block selection if pair is in session by another operator
+    if (isPairInSession(vrDeviceId, chairDeviceId)) {
       toast({
-        title: "Cannot select pair",
-        description: "Both VR and Chair must be online to select this pair",
+        title: "Pair Unavailable",
+        description: "This pair is currently in use by another operator's session",
         variant: "destructive",
       });
       return;
@@ -287,16 +328,20 @@ export default function DeviceSelectionStep({
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {filteredPairs.map((pair) => {
                 const isSelected = selectedPairIds.has(pair.id);
-                // ALWAYS allow selection - don't block based on online status
-                const canSelect = true;
+                const inSession = isPairInSession(pair.vr_device_id, pair.chair_device_id);
+                // Block selection if in session by another operator
+                const canSelect = !inSession;
 
                 return (
                   <Card
                     key={pair.id}
-                    className={`p-4 cursor-pointer transition-all ${
-                      isSelected ? "border-primary bg-primary/5 ring-2 ring-primary" : "hover:border-primary/50"
-                    }`}
-                    onClick={() => togglePairSelection(pair.id, canSelect)}
+                    className={`p-4 transition-all ${inSession
+                        ? "border-orange-500 bg-orange-500/10 cursor-not-allowed opacity-75"
+                        : isSelected
+                          ? "border-primary bg-primary/5 ring-2 ring-primary cursor-pointer"
+                          : "hover:border-primary/50 cursor-pointer"
+                      }`}
+                    onClick={() => togglePairSelection(pair.id, canSelect, pair.vr_device_id, pair.chair_device_id)}
                   >
                     <div className="space-y-3">
                       <div className="flex items-start justify-between">
@@ -305,7 +350,12 @@ export default function DeviceSelectionStep({
                             {pair.pair_name}
                           </h3>
                           <div className="flex items-center gap-2 mt-1">
-                            {pair.bothOnline ? (
+                            {inSession ? (
+                              <span className="flex items-center gap-1 text-xs text-orange-600 dark:text-orange-400 font-semibold">
+                                <Play className="w-3 h-3" />
+                                In Session (Another Operator)
+                              </span>
+                            ) : pair.bothOnline ? (
                               <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
                                 <Wifi className="w-3 h-3" />
                                 Both Online

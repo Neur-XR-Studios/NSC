@@ -218,3 +218,14 @@ export async function getFeedbackStats(): Promise<{
   return res.data?.data || res.data as any;
 }
 
+// Get devices currently in active sessions (by other operators)
+// Used to show "In Session" status and prevent double-booking
+export async function getDevicesInSession(): Promise<{
+  vrDeviceIds: string[];
+  chairDeviceIds: string[];
+}> {
+  const res = await api.get<{ status: boolean; data: { vrDeviceIds: string[]; chairDeviceIds: string[] } }>(
+    "sessions/devices/in-session"
+  );
+  return res.data || { vrDeviceIds: [], chairDeviceIds: [] };
+}

@@ -6,12 +6,132 @@ const mqttService = require('./MqttService');
 const logger = require('../config/logger');
 
 class SessionService {
-  async startSession({ vrDeviceId, chairDeviceId, journeyId, journeyIds, groupId, session_type }) {
+  /**
+   * Check if devices are currently in an active session (by another operator)
+   * @param {string} vrDeviceId - VR device ID to check
+   * @param {string} chairDeviceId - Chair device ID to check
+   * @param {number} excludeOperatorId - Operator ID to exclude from check (allow same operator to reuse)
+   * @returns {Promise<Object|null>} Returns session info if devices are in use, null otherwise
+   */
+  async checkDevicesInActiveSession(vrDeviceId, chairDeviceId, excludeOperatorId = null) {
+    // Find active sessions (on_going status) that use these devices
+    const whereClause = {
+      overall_status: 'on_going',
+      [Op.or]: []
+    };
+
+    // Check both session-level device assignments and participant-level
+    if (vrDeviceId) {
+      whereClause[Op.or].push({ vr_device_id: vrDeviceId });
+    }
+    if (chairDeviceId) {
+      whereClause[Op.or].push({ chair_device_id: chairDeviceId });
+    }
+
+    if (whereClause[Op.or].length === 0) return null;
+
+    // Exclude sessions by the same operator (they can manage their own sessions)
+    if (excludeOperatorId) {
+      whereClause.operator_id = { [Op.ne]: excludeOperatorId };
+    }
+
+    const existingSession = await Session.findOne({
+      where: whereClause,
+      include: [
+        { model: SessionParticipant, as: 'participants' }
+      ]
+    });
+
+    if (existingSession) {
+      return {
+        sessionId: existingSession.id,
+        operatorId: existingSession.operator_id,
+        status: existingSession.status
+      };
+    }
+
+    // Also check participants table for the devices
+    const participantWhere = {
+      [Op.or]: []
+    };
+    if (vrDeviceId) participantWhere[Op.or].push({ vr_device_id: vrDeviceId });
+    if (chairDeviceId) participantWhere[Op.or].push({ chair_device_id: chairDeviceId });
+
+    if (participantWhere[Op.or].length > 0) {
+      const existingParticipant = await SessionParticipant.findOne({
+        where: participantWhere,
+        include: [{
+          model: Session,
+          as: 'session',
+          where: {
+            overall_status: 'on_going',
+            ...(excludeOperatorId ? { operator_id: { [Op.ne]: excludeOperatorId } } : {})
+          }
+        }]
+      });
+
+      if (existingParticipant && existingParticipant.session) {
+        return {
+          sessionId: existingParticipant.session.id,
+          operatorId: existingParticipant.session.operator_id,
+          status: existingParticipant.session.status
+        };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Get all devices currently in active sessions (for frontend to show "in session" status)
+   * @param {number} excludeOperatorId - Operator ID to exclude (show only other operators' sessions)
+   * @returns {Promise<Object>} { vrDeviceIds: string[], chairDeviceIds: string[] }
+   */
+  async getDevicesInActiveSessions(excludeOperatorId = null) {
+    const whereClause = { overall_status: 'on_going' };
+    if (excludeOperatorId) {
+      whereClause.operator_id = { [Op.ne]: excludeOperatorId };
+    }
+
+    // Get devices from sessions table
+    const sessions = await Session.findAll({
+      where: whereClause,
+      attributes: ['vr_device_id', 'chair_device_id'],
+      include: [{
+        model: SessionParticipant,
+        as: 'participants',
+        attributes: ['vr_device_id', 'chair_device_id']
+      }]
+    });
+
+    const vrDeviceIds = new Set();
+    const chairDeviceIds = new Set();
+
+    sessions.forEach(s => {
+      if (s.vr_device_id) vrDeviceIds.add(s.vr_device_id);
+      if (s.chair_device_id) chairDeviceIds.add(s.chair_device_id);
+
+      // Also add participant devices
+      if (s.participants) {
+        s.participants.forEach(p => {
+          if (p.vr_device_id) vrDeviceIds.add(p.vr_device_id);
+          if (p.chair_device_id) chairDeviceIds.add(p.chair_device_id);
+        });
+      }
+    });
+
+    return {
+      vrDeviceIds: Array.from(vrDeviceIds),
+      chairDeviceIds: Array.from(chairDeviceIds)
+    };
+  }
+
+  async startSession({ vrDeviceId, chairDeviceId, journeyId, journeyIds, groupId, session_type, operatorId }) {
     const type = session_type === 'group' ? 'group' : 'individual';
 
     let vr = null;
     let chair = null;
-    const errors = { missingFields: [], notFoundDevices: [], notFoundJourneys: [] };
+    const errors = { missingFields: [], notFoundDevices: [], notFoundJourneys: [], devicesInUse: [] };
     const journeys = Array.isArray(journeyIds) ? journeyIds : (journeyId != null ? [journeyId] : []);
 
     if (type === 'individual') {
@@ -42,13 +162,30 @@ class SessionService {
       }
     }
 
+    // Check if devices are already in an active session by another operator
+    if (vr || chair) {
+      const inUse = await this.checkDevicesInActiveSession(
+        vr ? vr.id : null,
+        chair ? chair.id : null,
+        operatorId
+      );
+      if (inUse) {
+        errors.devicesInUse.push({
+          message: 'One or more devices are already in an active session',
+          sessionId: inUse.sessionId,
+          operatorId: inUse.operatorId
+        });
+        logger.warn(`[startSession] Devices already in use by session ${inUse.sessionId}`);
+      }
+    }
+
     if (journeys.length > 0) {
       const found = await journey.findAll({ where: { id: { [Op.in]: journeys } }, attributes: ['id'] });
       const foundIds = new Set(found.map(j => j.id));
       journeys.forEach(id => { if (!foundIds.has(id)) errors.notFoundJourneys.push(id); });
     }
 
-    if (errors.missingFields.length || errors.notFoundDevices.length || errors.notFoundJourneys.length) {
+    if (errors.missingFields.length || errors.notFoundDevices.length || errors.notFoundJourneys.length || errors.devicesInUse.length) {
       return { statusCode: httpStatus.BAD_REQUEST, response: { status: false, message: 'Validation failed', errors } };
     }
 
@@ -68,6 +205,7 @@ class SessionService {
 
     const session = await Session.create({
       id: uuidv4(),
+      operator_id: operatorId || null,
       vr_device_id: vr ? vr.id : null,
       chair_device_id: chair ? chair.id : null,
       status: 'ready',
@@ -152,10 +290,10 @@ class SessionService {
 
   /**
    * Create a GROUP session with multiple participants (each participant maps VR+Chair)
-   * payload: { members: [{ vrDeviceId, chairDeviceId, language? }], groupId?, journeyId?, journeyIds? }
+   * payload: { members: [{ vrDeviceId, chairDeviceId, language? }], groupId?, journeyId?, journeyIds?, operatorId? }
    * If any running group session exists, pause it first (per rule).
    */
-  async createGroupSession({ members = [], groupId, journeyId, journeyIds }) {
+  async createGroupSession({ members = [], groupId, journeyId, journeyIds, operatorId }) {
     const errors = { missingFields: [], members: [], notFoundJourneys: [] };
     if (!Array.isArray(members) || members.length === 0) {
       errors.missingFields.push('members');
@@ -190,6 +328,7 @@ class SessionService {
 
     const session = await Session.create({
       id: uuidv4(),
+      operator_id: operatorId || null,
       status: 'ready',
       group_id: finalGroupId,
       journey_ids: journeys.length > 0 ? journeys : null,
@@ -376,13 +515,18 @@ class SessionService {
     return result;
   }
 
-  async listSessions({ page = 1, limit = 20, status = 'on_going' }) {
+  async listSessions({ page = 1, limit = 20, status = 'on_going', operatorId = null }) {
     const offset = (Number(page) - 1) * Number(limit);
     const where = {};
     const BASE_URL = process.env.BASE_URL;
 
     if (status) {
       where.overall_status = status;
+    }
+
+    // Filter by operator if provided - this ensures session isolation per operator
+    if (operatorId) {
+      where.operator_id = operatorId;
     }
 
     const { rows, count } = await Session.findAndCountAll({
@@ -761,7 +905,7 @@ class SessionService {
         payload = { cmd: 'seek', positionMs, applyAtMs, journeyId };
         break;
       case 'sync':
-        payload = { cmd: 'sync', serverTimeMs: Date.now(), journeyId };
+        payload = { cmd: 'sync', serverTimeMs: Date.now(), positionMs, journeyId };
         break;
       case 'select_journey':
         payload = { cmd: 'select_journey', journeyId, language, applyAtMs };
@@ -971,7 +1115,7 @@ class SessionService {
         payload = { cmd: 'seek', positionMs, applyAtMs, journeyId };
         break;
       case 'sync':
-        payload = { cmd: 'sync', serverTimeMs: Date.now(), journeyId };
+        payload = { cmd: 'sync', serverTimeMs: Date.now(), positionMs, journeyId };
         break;
       case 'select_journey':
         payload = { cmd: 'select_journey', journeyId, language: language || '', applyAtMs };
@@ -1022,12 +1166,17 @@ class SessionService {
   /**
    * Get all active sessions (for session persistence/restoration)
    * @param {string} sessionType - Optional filter: 'individual' or 'group'
+   * @param {number} operatorId - Optional operator ID for session isolation
    * @returns {Promise<Object>}
    */
-  async getActiveSessions(sessionType = null) {
+  async getActiveSessions(sessionType = null, operatorId = null) {
     const where = { is_active: true };
     if (sessionType) {
       where.session_type = sessionType;
+    }
+    // Filter by operator if provided - this ensures session isolation per operator
+    if (operatorId) {
+      where.operator_id = operatorId;
     }
 
     const sessions = await Session.findAll({

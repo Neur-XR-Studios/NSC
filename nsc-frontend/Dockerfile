@@ -2,7 +2,8 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+COPY .npmrc ./
+RUN npm install --no-audit --no-fund
 COPY . .
 ARG VITE_API_BASE_URL
 ARG VITE_API_URL

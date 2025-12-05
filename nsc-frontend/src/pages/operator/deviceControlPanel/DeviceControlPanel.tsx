@@ -75,14 +75,14 @@ export default function DeviceControlPanel() {
     (import.meta.env.VITE_BACKEND_URL as string) ||
     (typeof window !== "undefined"
       ? `${window.location.protocol}//${window.location.hostname}:8001`
-      : "http://localhost:8001");
+      : "http://192.168.0.106:8001");
   const envUrl = import.meta.env.VITE_MQTT_WS_URL as string;
   const mqttWsUrl =
     (envUrl && !envUrl.includes("localhost"))
       ? envUrl
       : (typeof window !== "undefined"
         ? `ws://${window.location.hostname}:9001`
-        : "ws://localhost:9001");
+        : "ws://192.168.0.106:9001");
   const [forceBridge] = useState<boolean>(true);
   const [mqttUrl] = useState<string>(forceBridge ? backendUrl : mqttWsUrl);
   const [clientId] = useState<string>(`admin-${Math.random().toString(36).slice(2, 8).toUpperCase()}`);
@@ -765,23 +765,18 @@ export default function DeviceControlPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Empty deps - only run once on mount
 
-  // Stale device detection - DISABLED for stability
-  // Devices only go offline via:
-  // 1. LWT (Last Will Testament) when broker detects disconnect
-  // 2. Explicit disconnect message from device
-  // This prevents flickering and false offline detection
-  // 
-  // If you need stale detection, uncomment below with a VERY long threshold (5+ minutes)
-  /*
+  // Stale device detection - mark devices offline if no heartbeat received recently
+  // This is important because LWT (Last Will Testament) doesn't always fire reliably
+  // especially on clean disconnects or when devices just stop sending heartbeats
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
-      const STALE_THRESHOLD = 300000; // 5 minutes - very conservative
-      
+      const STALE_THRESHOLD = 15000; // 15 seconds - devices should send heartbeat every 5-10s
+
       setDevicesMap((prev) => {
         let hasChanges = false;
         const next = new Map(prev);
-        
+
         for (const [id, device] of next.entries()) {
           if (device.online && device.lastSeen && (now - device.lastSeen) > STALE_THRESHOLD) {
             console.log(`[DeviceControlPanel] Device ${id} marked offline (no heartbeat for ${Math.round((now - device.lastSeen) / 1000)}s)`);
@@ -789,14 +784,13 @@ export default function DeviceControlPanel() {
             next.set(id, { ...device, online: false });
           }
         }
-        
+
         return hasChanges ? next : prev;
       });
-    }, 60000); // Check every 60 seconds
+    }, 5000); // Check every 5 seconds
 
     return () => clearInterval(interval);
   }, []);
-  */
 
   const sendCmd = useCallback(
     (sessionId: string, type: "play" | "pause" | "seek" | "stop", positionMs?: number, journeyId?: number) => {
